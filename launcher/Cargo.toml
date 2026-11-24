@@ -1,10 +1,13 @@
 [package]
 name = "sct_launcher"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 description = "Starts a Python module of the Screen Check Suite from the shared embeddable Python"
 
 [dependencies]
+
+[build-dependencies]
+winresource = "0.1"
 
 [profile.release]
 opt-level = "z"

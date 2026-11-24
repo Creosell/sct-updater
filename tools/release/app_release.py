@@ -10,21 +10,26 @@
 # ///
 """Releases Python modules of the Screen Check Suite.
 
-A module lives in its own repository and describes itself with ``sct_app.toml``. A release uploads
-the module code, the wheels of its lock file (only those the server lacks) and a manifest.
-Modules are independent: each has its own dependencies and its own lock file.
+A module lives in its own repository and describes itself with ``sct_app.toml``; its Python minor version
+comes from ``.python-version``, its dependencies from ``requirements.in`` and ``requirements.lock``. A release
+uploads the module code, the wheels of its lock file (only those the server lacks), the embeddable Python
+(only when the server lacks it) and a manifest. Modules are independent: each has its own dependencies.
 
-Commands:
-    lock         Resolve the module's requirements.in into requirements.lock with hashes (uses uv).
-    app          Release a module version: code files, missing wheels, manifest (published last).
-    python-core  Publish the embeddable Python archive of a minor version (once per Python upgrade).
+Commands (the wheel cache is the folder in the SCT_WHEELHOUSE environment variable, default ~/.sct_wheelhouse):
+    app [--upload]     Prepare a module release; without --upload nothing is uploaded (dry run).
+    upgrade            Move the pinned dependency versions to the newest ones requirements.in allows.
+    updater [--upload] Build the Updater (dotnet publish, single-file exe), zip it and release it; the version is
+                       read from the built Updater.exe.
+    zip [--upload]     Release any build folder as a zip package: zip <folder> <product_id> <version>.
+
+requirements.lock is maintained automatically: ``app`` rewrites it (keeping the pinned versions)
+whenever requirements.in changed since the lock was made. Commit the lock when the tool says it was updated.
 
 sct_app.toml (in the module repository):
     id = "report_generator"
-    python = "3.13"
-    requirements = "requirements.in"   # optional
-    lock = "requirements.lock"         # optional
     launcher = "ReportGenerator.exe"   # optional: Rust launcher built with cargo, installed at the Updater root
+    title = "Report Generator"         # optional: shown as the file description of the launcher (default: id)
+    icon = "assets/app.ico"            # optional: icon of the launcher, a .ico file in the module repository
     [[files]]                          # source (file or folder) -> destination under apps/<id>/
     src = "main.py"
     dst = "__main__.py"
@@ -48,6 +53,7 @@ import subprocess
 import sys
 import tomllib
 import urllib.request
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -60,10 +66,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNTIME_DIR = REPO_ROOT / "runtime"
 PYTHON_EMBED_FILE = RUNTIME_DIR / "python_embed.json"
 PACKAGE_MODE = "app"
+UPDATER_ID = "suite_updater"
+UPDATER_BUILD_DIR = REPO_ROOT / "release_artifacts" / "build" / UPDATER_ID
+UPDATER_PROJECT = REPO_ROOT / "SCT_Updater" / "SCT_Updater.csproj"
 LAUNCHER_DIR = REPO_ROOT / "launcher"
 REMOTE_ROOT = "SCT/Updater"
 WHEELS_REMOTE = f"{REMOTE_ROOT}/runtime/wheels"
 PYTHON_REMOTE = f"{REMOTE_ROOT}/runtime/python"
+PYTHON_DESCRIPTOR_REMOTE = f"{REMOTE_ROOT}/runtime"
 MAX_WORKERS = 8
 UPLOAD_RETRIES = 3
 
@@ -90,6 +100,8 @@ class AppSpec:
     lock: Path
     files: list[dict]
     launcher: str | None = None
+    title: str | None = None
+    icon: Path | None = None
 
 
 def sha256_of(path: Path) -> str:
@@ -107,39 +119,61 @@ def load_spec(module_dir: Path) -> AppSpec:
     if not path.exists():
         raise FileNotFoundError(f"{path} not found; add the descriptor to the module repository.")
     data = tomllib.loads(path.read_text(encoding="utf-8"))
-    for key in ("id", "python", "files"):
+    for key in ("id", "files"):
         if key not in data:
             raise ValueError(f"{path.name}: '{key}' is required")
-    if not re.fullmatch(r"\d+\.\d+", data["python"]):
-        raise ValueError(f"{path.name}: python must be a minor version like 3.13")
     launcher = data.get("launcher")
     if launcher is not None and not re.fullmatch(r"[^\\/:*?\"<>|]+\.exe", launcher):
         raise ValueError(f"{path.name}: launcher must be a file name ending with .exe")
-    return AppSpec(module_dir, data["id"], data["python"],
-                   module_dir / data.get("requirements", "requirements.in"),
-                   module_dir / data.get("lock", "requirements.lock"), data["files"], launcher)
+    icon = None
+    if "icon" in data:
+        icon = module_dir / data["icon"]
+        if icon.suffix.lower() != ".ico" or not icon.is_file():
+            raise FileNotFoundError(f"{path.name}: icon must be an existing .ico file, got {icon}")
+    return AppSpec(module_dir, data["id"], read_python_minor(module_dir),
+                   module_dir / "requirements.in", module_dir / "requirements.lock", data["files"],
+                   launcher, data.get("title"), icon)
 
 
-def build_launcher(app_id: str) -> Path:
-    """Builds the Rust launcher for a module with cargo and returns the path of the produced exe.
+def read_python_minor(module_dir: Path) -> str:
+    """Returns the Python minor version (e.g. "3.13") from the module's .python-version file."""
+    path = module_dir / ".python-version"
+    if not path.exists():
+        raise FileNotFoundError(f"{path} not found; the module must pin its Python version there.")
+    match = re.match(r"\s*(\d+\.\d+)", path.read_text(encoding="utf-8"))
+    if not match:
+        raise ValueError(f"{path.name} must start with a Python version like 3.13")
+    return match.group(1)
 
-    The module id is baked into the exe. The build runs inside the launcher folder so that its
+
+def build_launcher(spec: AppSpec, version: str) -> Path:
+    """Builds the Rust launcher of a module with cargo and returns the path of the exe under its final name.
+
+    The module id, the exe name, the title (file description), the module release version (file and product
+    version) and the icon are baked into the exe through environment variables read by launcher/build.rs. The build runs inside the launcher folder so that its
     .cargo/config.toml (reproducible linking) applies.
     """
     cargo = shutil.which("cargo")
     if not cargo:
         sys.exit("cargo is required to build the launcher (install Rust from https://rustup.rs).")
-    target = REPO_ROOT / "release_artifacts" / "launcher" / app_id
-    subprocess.run([cargo, "build", "--release", "--target-dir", str(target)],
-                   cwd=LAUNCHER_DIR, env={**os.environ, "SCT_APP": app_id}, check=True)
-    return target / "release" / "sct_launcher.exe"
+    target = REPO_ROOT / "release_artifacts" / "launcher" / spec.id
+    env = {**os.environ, "SCT_APP": spec.id, "SCT_EXE": spec.launcher, "SCT_TITLE": spec.title or spec.id,
+           "SCT_VERSION": version}
+    if spec.icon:
+        env["SCT_ICON"] = str(spec.icon.resolve())
+    subprocess.run([cargo, "build", "--release", "--target-dir", str(target)], cwd=LAUNCHER_DIR, env=env, check=True)
+
+    built = target / "release" / spec.launcher
+    os.replace(target / "release" / "sct_launcher.exe", built)
+    return built
 
 
-def with_launcher(spec: AppSpec, files: list[tuple[Path, str]], build=build_launcher) -> list[tuple[Path, str]]:
+def with_launcher(spec: AppSpec, files: list[tuple[Path, str]], version: str,
+                  build=build_launcher) -> list[tuple[Path, str]]:
     """Adds the module launcher, installed at the Updater root under its exe name, to the file list."""
     if not spec.launcher:
         return files
-    return sorted([*files, (build(spec.id), spec.launcher)], key=lambda item: item[1])
+    return sorted([*files, (build(spec, version), spec.launcher)], key=lambda item: item[1])
 
 
 def parse_lock(text: str) -> list[Pin]:
@@ -238,10 +272,20 @@ def build_manifest(spec: AppSpec, version: str, files: list[tuple[Path, str]], w
     }
 
 
-def python_embed(wheelhouse: Path) -> tuple[dict, Path]:
-    """Returns the pinned embeddable Python descriptor and its cached zip, downloading it when needed."""
+def wheelhouse_dir() -> Path:
+    """Returns the local wheel and Python cache: the SCT_WHEELHOUSE environment variable or ~/.sct_wheelhouse."""
+    return Path(os.environ.get("SCT_WHEELHOUSE") or Path.home() / ".sct_wheelhouse")
+
+
+def python_embed(wheelhouse: Path, minor: str) -> tuple[dict, Path]:
+    """Returns the pinned embeddable Python descriptor and its cached zip, downloading it when needed.
+
+    The pinned version must belong to the Python minor version the module declares.
+    """
     info = json.loads(PYTHON_EMBED_FILE.read_text(encoding="utf-8"))
     version = info["version"]
+    if not version.startswith(f"{minor}."):
+        raise ValueError(f"The module uses Python {minor}, but {PYTHON_EMBED_FILE.name} pins {version}.")
     archive = wheelhouse / "python" / f"python-{version}-embed-amd64.zip"
     if not archive.exists():
         archive.parent.mkdir(parents=True, exist_ok=True)
@@ -325,16 +369,32 @@ async def upload_all(nc, jobs: list[tuple[Path, str]]) -> bool:
     return all(await asyncio.gather(*(worker(local, remote) for local, remote in jobs)))
 
 
-async def upload_app(nc, manifest: dict, files: list[tuple[Path, str]], wheels: list[Path], manifest_path: Path) -> None:
-    """Uploads the code files and the missing wheels, then publishes the manifest last."""
+def python_descriptor(info: dict, archive: Path, folder: Path) -> Path:
+    """Writes the descriptor the Updater reads for a Python minor version and returns its path."""
+    minor = ".".join(info["version"].split(".")[:2])
+    descriptor = folder / f"python_{minor}.json"
+    descriptor.write_text(json.dumps({"version": info["version"], "file": archive.name, "sha256": info["sha256"],
+                                      "size": archive.stat().st_size}, indent=2) + "\n", encoding="utf-8")
+    return descriptor
+
+
+async def upload_app(nc, manifest: dict, files: list[tuple[Path, str]], wheels: list[Path], manifest_path: Path,
+                     python_zip: Path, python_json: Path) -> None:
+    """Uploads the missing wheels and Python archive and the code files, then publishes the manifest last."""
     remote_wheels = await list_remote(nc, WHEELS_REMOTE)
+    remote_python = await list_remote(nc, PYTHON_REMOTE)
     missing = [w for w in wheels if remote_wheels.get(w.name) != w.stat().st_size]
     base = f"{REMOTE_ROOT}/{manifest['base_url']}"
 
     jobs = [(path, f"{base}/{rel}") for path, rel in files] + [(w, f"{WHEELS_REMOTE}/{w.name}") for w in missing]
+    python_missing = remote_python.get(python_zip.name) != python_zip.stat().st_size
+    if python_missing:
+        jobs.append((python_zip, f"{PYTHON_REMOTE}/{python_zip.name}"))
+    jobs.append((python_json, f"{PYTHON_DESCRIPTOR_REMOTE}/{python_json.name}"))
     size_mb = sum(local.stat().st_size for local, _ in jobs) / 1048576
     logger.info(f"{manifest['product_id']} {manifest['version']}: {len(files)} code files, {len(wheels)} wheels "
-                f"({len(missing)} to upload) | total upload {size_mb:.1f} MB")
+                f"({len(missing)} to upload), Python {'to upload' if python_missing else 'already on the server'} "
+                f"| total upload {size_mb:.1f} MB")
 
     if not await upload_all(nc, jobs):
         logger.error("Some uploads failed. Manifest not published.")
@@ -345,99 +405,209 @@ async def upload_app(nc, manifest: dict, files: list[tuple[Path, str]], wheels: 
     logger.success("Done!")
 
 
-async def upload_python_core(nc, info: dict, archive: Path, descriptor: Path) -> None:
-    """Uploads the embeddable Python archive and its descriptor (descriptor last)."""
-    remote_python = await list_remote(nc, PYTHON_REMOTE)
-    jobs = [] if remote_python.get(archive.name) == archive.stat().st_size else [(archive, f"{PYTHON_REMOTE}/{archive.name}")]
-    logger.info(f"Python {info['version']}: {'already on the server' if not jobs else 'uploading the archive'}")
-    if not await upload_all(nc, jobs):
-        sys.exit("Archive upload failed")
-    if not await upload_all(nc, [(descriptor, f"{PYTHON_REMOTE}/{descriptor.name}")]):
-        sys.exit("Descriptor upload failed")
-    logger.success("Done!")
-
-
 # --- Commands ---
 
-def cmd_lock(args: argparse.Namespace) -> None:
-    """Resolves the module's requirements.in into requirements.lock with hashes."""
-    spec = load_spec(Path(args.module))
+LOCK_SOURCE_MARK = "# requirements.in sha256: "
+
+
+def lock_source_hash(lock_text: str) -> str | None:
+    """Returns the SHA256 of requirements.in recorded in a lock file, or None when there is no record."""
+    for line in lock_text.splitlines():
+        if line.startswith(LOCK_SOURCE_MARK):
+            return line[len(LOCK_SOURCE_MARK):].strip()
+    return None
+
+
+def compile_lock(spec: AppSpec, upgrade: bool = False, run=subprocess.run) -> None:
+    """Resolves requirements.in into requirements.lock with hashes and records which requirements.in it came from.
+
+    Versions already pinned in the lock are kept unless ``upgrade`` is set.
+    """
     uv = shutil.which("uv")
     if not uv:
         sys.exit("uv is required to compile the lock file.")
     command = [uv, "pip", "compile", str(spec.requirements), "--python-version", spec.python,
-               "--python-platform", "windows", "--only-binary", ":all:", "--generate-hashes", "-o", str(spec.lock)]
-    if args.upgrade:
+               "--python-platform", "windows", "--only-binary", ":all:", "--generate-hashes", "--no-header",
+               "-o", str(spec.lock)]
+    if upgrade:
         command.append("--upgrade")
-    subprocess.run(command, check=True)
-    logger.success(f"Lock written: {spec.lock}")
+    run(command, check=True)
+    header = ("# Generated by tools/release/app_release.py; do not edit.\n"
+              f"{LOCK_SOURCE_MARK}{sha256_of(spec.requirements)}\n")
+    spec.lock.write_text(header + spec.lock.read_text(encoding="utf-8"), encoding="utf-8")
+
+
+def ensure_lock(spec: AppSpec, compile_fn=compile_lock) -> bool:
+    """Brings requirements.lock in line with requirements.in; returns whether the lock was rewritten.
+
+    The lock is rewritten when it is missing or was made from a different requirements.in. Pinned versions are kept.
+    """
+    if not spec.requirements.exists():
+        raise FileNotFoundError(f"{spec.requirements} not found; list the runtime dependencies of the module there.")
+    if spec.lock.exists() and lock_source_hash(spec.lock.read_text(encoding="utf-8")) == sha256_of(spec.requirements):
+        return False
+    compile_fn(spec)
+    logger.warning(f"{spec.lock.name} was updated from {spec.requirements.name}; commit it.")
+    return True
+
+
+def cmd_upgrade(args: argparse.Namespace) -> None:
+    """Moves the pinned versions of a module to the newest ones allowed by requirements.in."""
+    spec = load_spec(Path(args.module))
+    compile_lock(spec, upgrade=True)
+    logger.success(f"Versions upgraded in {spec.lock}; commit it.")
 
 
 def cmd_app(args: argparse.Namespace) -> None:
-    """Prepares a module release and uploads it."""
+    """Prepares a module release; uploads it only with --upload (otherwise a dry run)."""
     spec = load_spec(Path(args.module))
-    if not spec.lock.exists():
-        sys.exit(f"{spec.lock.name} not found; run the 'lock' command first.")
+    ensure_lock(spec)
 
-    files = with_launcher(spec, collect_files(spec))
-    wheels = fill_wheelhouse(parse_lock(spec.lock.read_text(encoding="utf-8")), Path(args.wheelhouse), spec.python)
+    wheelhouse = wheelhouse_dir()
+    files = with_launcher(spec, collect_files(spec), args.version)
+    wheels = fill_wheelhouse(parse_lock(spec.lock.read_text(encoding="utf-8")), wheelhouse, spec.python)
+    python, python_zip = python_embed(wheelhouse, spec.python)
     manifest = build_manifest(spec, args.version, files, wheels)
 
     out_dir = REPO_ROOT / "release_artifacts"
     out_dir.mkdir(exist_ok=True)
     manifest_path = out_dir / f"{spec.id}_{args.version}.json"
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    logger.info(f"Manifest: {manifest_path.name} | {len(files)} code files | {len(wheels)} wheels | Python {spec.python}")
+    python_json = python_descriptor(python, python_zip, out_dir)
+    logger.info(f"Manifest: {manifest_path.name} | {len(files)} code files | {len(wheels)} wheels | Python {python['version']}")
 
-    if not args.upload and input("Upload? (y/n): ").lower() != "y":
+    if not args.upload:
+        logger.info("Dry run: nothing was uploaded. Add --upload to publish.")
         return
 
     async def run() -> None:
-        await upload_app(await get_nc_client(), manifest, files, wheels, manifest_path)
+        await upload_app(await get_nc_client(), manifest, files, wheels, manifest_path, python_zip, python_json)
 
     asyncio.run(run())
 
 
-def cmd_python_core(args: argparse.Namespace) -> None:
-    """Publishes the pinned embeddable Python archive and a descriptor named after its minor version."""
-    info, archive = python_embed(Path(args.wheelhouse))
-    minor = ".".join(info["version"].split(".")[:2])
+def publish_updater(run=subprocess.run) -> Path:
+    """Publishes the Updater into a clean folder as one framework-dependent single-file exe and returns the folder.
+
+    The folder is recreated on every run, so nothing but the fresh build can end up in the package.
+    """
+    dotnet = shutil.which("dotnet")
+    if not dotnet:
+        sys.exit("dotnet is required to build the Updater (install the .NET 8 SDK).")
+    shutil.rmtree(UPDATER_BUILD_DIR, ignore_errors=True)
+    run([dotnet, "publish", str(UPDATER_PROJECT), "-c", "Release", "-o", str(UPDATER_BUILD_DIR), "--nologo", "-v:q"],
+        check=True)
+    loose = sorted(item.name for item in UPDATER_BUILD_DIR.rglob("*.dll"))
+    if loose:
+        sys.exit(f"The Updater must be a single exe, found: {', '.join(loose)}")
+    return UPDATER_BUILD_DIR
+
+
+def read_exe_version(exe: Path) -> str:
+    """Returns the file version of a Windows exe as dotted text; a zero fourth part is dropped (1.1.1.0 -> 1.1.1)."""
+    import ctypes
+    from ctypes import wintypes
+
+    class FixedFileInfo(ctypes.Structure):
+        _fields_ = [(name, wintypes.DWORD) for name in (
+            "signature", "struc_version", "file_version_ms", "file_version_ls", "product_version_ms",
+            "product_version_ls", "file_flags_mask", "file_flags", "file_os", "file_type", "file_subtype",
+            "file_date_ms", "file_date_ls")]
+
+    api = ctypes.WinDLL("version")
+    size = api.GetFileVersionInfoSizeW(str(exe), None)
+    if not size:
+        raise ValueError(f"{exe} has no version information")
+    data = ctypes.create_string_buffer(size)
+    api.GetFileVersionInfoW(str(exe), 0, size, data)
+    block, length = ctypes.c_void_p(), wintypes.UINT()
+    api.VerQueryValueW(data, "\\", ctypes.byref(block), ctypes.byref(length))
+    info = ctypes.cast(block, ctypes.POINTER(FixedFileInfo)).contents
+    parts = [info.file_version_ms >> 16, info.file_version_ms & 0xFFFF,
+             info.file_version_ls >> 16, info.file_version_ls & 0xFFFF]
+    return ".".join(map(str, parts[:3] if parts[3] == 0 else parts))
+
+
+def build_zip_package(folder: Path, product_id: str, version: str, out_dir: Path) -> tuple[Path, Path]:
+    """Zips the content of a folder and writes the zip-mode manifest of the product.
+
+    Returns (manifest path, zip path); the manifest lists the zip with its SHA256.
+    """
+    zip_name = f"{product_id}_{version}.zip"
+    zip_path = out_dir / zip_name
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
+        for item in sorted(folder.rglob("*")):
+            if item.is_file():
+                archive.write(item, item.relative_to(folder))
+                logger.info(f"  + {item.relative_to(folder).as_posix()}")
+    manifest = {"product_id": product_id, "version": version, "base_url": f"versions/{product_id}/{version}",
+                "package_mode": "zip", "files": [{"path": zip_name, "hash": sha256_of(zip_path)}]}
+    manifest_path = out_dir / f"{product_id}_{version}.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    return manifest_path, zip_path
+
+
+def release_folder(folder: Path, product_id: str, version: str, upload: bool) -> None:
+    """Releases a folder as a zip package; uploads only with upload=True (otherwise a dry run)."""
     out_dir = REPO_ROOT / "release_artifacts"
     out_dir.mkdir(exist_ok=True)
-    descriptor = out_dir / f"python_{minor}.json"
-    descriptor.write_text(json.dumps({"version": info["version"], "file": archive.name, "sha256": info["sha256"],
-                                      "size": archive.stat().st_size}, indent=2) + "\n", encoding="utf-8")
+    manifest_path, zip_path = build_zip_package(folder, product_id, version, out_dir)
+    logger.info(f"{product_id} {version}: {zip_path.name} {zip_path.stat().st_size / 1048576:.1f} MB")
 
-    if not args.upload and input("Upload? (y/n): ").lower() != "y":
+    if not upload:
+        logger.info("Dry run: nothing was uploaded. Add --upload to publish.")
         return
 
     async def run() -> None:
-        await upload_python_core(await get_nc_client(), info, archive, descriptor)
+        nc = await get_nc_client()
+        base = f"{REMOTE_ROOT}/versions/{product_id}"
+        if not await upload_all(nc, [(zip_path, f"{base}/{version}/{zip_path.name}")]):
+            sys.exit("Upload failed. Manifest not published.")
+        if not await upload_all(nc, [(manifest_path, f"{base}/{manifest_path.name}")]):
+            sys.exit("Manifest upload failed")
+        logger.success("Done!")
 
     asyncio.run(run())
+
+
+def cmd_zip(args: argparse.Namespace) -> None:
+    """Releases any build folder as a zip package of the given product."""
+    folder = Path(args.folder)
+    if not folder.is_dir():
+        sys.exit(f"Folder not found: {folder}")
+    release_folder(folder, args.product_id, args.version, args.upload)
+
+
+def cmd_updater(args: argparse.Namespace) -> None:
+    """Builds the Updater and releases it as a zip package; the version is read from the built Updater.exe."""
+    folder = publish_updater()
+    release_folder(folder, UPDATER_ID, read_exe_version(folder / "Updater.exe"), args.upload)
 
 
 def main() -> None:
-    default_wheelhouse = os.environ.get("SCT_WHEELHOUSE", str(Path.home() / ".sct_wheelhouse"))
-    parser = argparse.ArgumentParser(description="Screen Check Suite module release tool")
+    parser = argparse.ArgumentParser(description="Screen Check Suite release tool")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    lock = sub.add_parser("lock", help="resolve requirements.in of a module into requirements.lock")
-    lock.add_argument("module", help="path of the module repository")
-    lock.add_argument("--upgrade", action="store_true", help="allow package versions to change")
-    lock.set_defaults(func=cmd_lock)
+    updater = sub.add_parser("updater", help="build and release the Updater itself (dry run unless --upload)")
+    updater.add_argument("--upload", action="store_true", help="publish to the server")
+    updater.set_defaults(func=cmd_updater)
 
-    app = sub.add_parser("app", help="release a module version")
+    zipper = sub.add_parser("zip", help="release any build folder as a zip package (dry run unless --upload)")
+    zipper.add_argument("folder", help="folder with the published build")
+    zipper.add_argument("product_id")
+    zipper.add_argument("version")
+    zipper.add_argument("--upload", action="store_true", help="publish to the server")
+    zipper.set_defaults(func=cmd_zip)
+
+    upgrade = sub.add_parser("upgrade", help="move the pinned dependency versions of a module to the newest allowed")
+    upgrade.add_argument("module", help="path of the module repository")
+    upgrade.set_defaults(func=cmd_upgrade)
+
+    app = sub.add_parser("app", help="release a module version (dry run unless --upload)")
     app.add_argument("module", help="path of the module repository")
     app.add_argument("version")
-    app.add_argument("--wheelhouse", default=default_wheelhouse, help="local wheel cache (env SCT_WHEELHOUSE)")
-    app.add_argument("--upload", action="store_true", help="upload without the confirmation prompt")
+    app.add_argument("--upload", action="store_true", help="publish to the server")
     app.set_defaults(func=cmd_app)
-
-    core = sub.add_parser("python-core", help="publish the embeddable Python archive")
-    core.add_argument("--wheelhouse", default=default_wheelhouse, help="local cache (env SCT_WHEELHOUSE)")
-    core.add_argument("--upload", action="store_true", help="upload without the confirmation prompt")
-    core.set_defaults(func=cmd_python_core)
 
     args = parser.parse_args()
     args.func(args)
