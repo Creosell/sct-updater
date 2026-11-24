@@ -19,6 +19,7 @@ namespace SCT_Updater
             // Clear old log file on startup
             try
             {
+                Directory.CreateDirectory(Path.GetDirectoryName(_logPath));
                 if (File.Exists(_logPath))
                 {
                     File.Delete(_logPath);

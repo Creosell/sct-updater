@@ -1,4 +1,4 @@
-﻿// AppConfig.cs
+// AppConfig.cs
 using System;
 using System.IO;
 using System.Windows.Forms;
@@ -21,7 +21,7 @@ namespace SCT_Updater
         // --- Python modules ("app" packages), relative to the application folder ---
         public const string APPS_DIR = "apps";
         public const string PYTHON_RUNTIME_DIR = "apps/python_runtime";
-        public const string WHEELHOUSE_DIR = "tools/wheelhouse";
+        public const string WHEELHOUSE_DIR = "apps/wheelhouse";
         public const string DEFAULT_WHEELS_URL = "runtime/wheels";
 
         /// <summary>Shared blob store (relative to the Updater root) used when a manifest has no "store_url".</summary>

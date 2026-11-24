@@ -132,7 +132,7 @@ namespace SCT_Updater.Tests
             Assert.Equal("shared", File.ReadAllText(Path_("config/res.txt")));
             Assert.Equal("one", File.ReadAllText(Path_($"apps/{Id}/pkgone/__init__.py")));
             Assert.Equal("two", File.ReadAllText(Path_($"apps/{Id}/pkgtwo/__init__.py")));
-            Assert.Equal(2, Directory.GetFiles(Path_("tools/wheelhouse"), "*.whl").Length);
+            Assert.Equal(2, Directory.GetFiles(Path_("apps/wheelhouse"), "*.whl").Length);
         }
 
         [Fact]
