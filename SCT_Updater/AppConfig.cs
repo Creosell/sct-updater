@@ -10,7 +10,6 @@ namespace SCT_Updater
         // --- App Constants ---
         public const string LOCAL_VERSIONS_FILE = "local_versions.json";
         public const string UPDATER_ID = "suite_updater";
-        public const string UPDATE_STUB_FILENAME = "update_stub.bat";
         public const int MAX_PARALLEL_DOWNLOADS = 20;
 
         // --- Package modes (file manifest "package_mode") ---

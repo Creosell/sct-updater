@@ -37,7 +37,8 @@ namespace SCT_Updater
         /// <summary>
         /// Builds the cmd.exe arguments of the restart: wait, move the new files over the installation, remove the temp
         /// folder and start the application. Both folders are passed without a trailing separator, because a backslash
-        /// before the closing quote escapes it for robocopy (exit code 16, nothing is copied).
+        /// before the closing quote escapes it for robocopy (exit code 16, nothing is copied). The robocopy log and its
+        /// exit code are written to the logs folder for <see cref="SelfUpdateGuard.ImportRestartReport"/>.
         /// </summary>
         /// <param name="currentDir">Installation folder (may end with a separator).</param>
         /// <param name="tempDir">Folder with the new files (may end with a separator).</param>
@@ -47,8 +48,13 @@ namespace SCT_Updater
             char[] separators = { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar };
             currentDir = currentDir.TrimEnd(separators);
             tempDir = tempDir.TrimEnd(separators);
+            string reportDir = Path.Combine(currentDir, "logs");
+            string robocopyLog = Path.Combine(reportDir, SelfUpdateGuard.RobocopyLogFile);
+            string exitCodeFile = Path.Combine(reportDir, SelfUpdateGuard.ExitCodeFile);
+            // "call echo %^ERRORLEVEL%" reads the robocopy exit code when the line runs, not when cmd parses it
             return $"/C ping 127.0.0.1 -n 2 > nul & " +
-                   $"robocopy \"{tempDir}\" \"{currentDir}\" /E /IS /MOVE > nul & " +
+                   $"robocopy \"{tempDir}\" \"{currentDir}\" /E /IS /MOVE /R:20 /W:1 /NP /UNICODE /LOG:\"{robocopyLog}\" > nul & " +
+                   $"call echo %^ERRORLEVEL% > \"{exitCodeFile}\" & " +
                    $"rmdir /s /q \"{tempDir}\" & " +
                    $"start \"\" \"{Path.Combine(currentDir, exeName)}\"";
         }

@@ -16,9 +16,10 @@
     <Compile Include="..\SCT_Updater\Logger.cs" Link="Sources\Logger.cs" />
     <Compile Include="..\SCT_Updater\ManifestClasses.cs" Link="Sources\ManifestClasses.cs" />
     <Compile Include="..\SCT_Updater\NextcloudClient.cs" Link="Sources\NextcloudClient.cs" />
+    <Compile Include="..\SCT_Updater\SelfUpdateGuard.cs" Link="Sources\SelfUpdateGuard.cs" />
     <Compile Include="..\SCT_Updater\UpdateService.cs" Link="Sources\UpdateService.cs" />
     <Compile Include="..\SCT_Updater\UpdateService.App.cs" Link="Sources\UpdateService.App.cs" />
-    <Compile Include="..\SCT_Updater\Utility.cs.cs" Link="Sources\Utility.cs" />
+    <Compile Include="..\SCT_Updater\Utility.cs" Link="Sources\Utility.cs" />
     <Compile Include="..\SCT_Updater\WheelInstaller.cs" Link="Sources\WheelInstaller.cs" />
   </ItemGroup>
 

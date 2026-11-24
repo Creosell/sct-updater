@@ -663,9 +663,16 @@ namespace SCT_Updater
             statusProgress.Report("Download complete.");
         }
 
-        public async Task StartSelfUpdateAsync(Product product, IProgress<string> statusProgress, IProgress<int> percentProgress)
+        /// <summary>
+        /// Downloads the new Updater into a temporary folder and restarts through a script that replaces the files.
+        /// </summary>
+        /// <param name="product">Updater entry of the manifest (the version to install).</param>
+        /// <param name="currentVersion">Running version, remembered to detect a replacement that did not happen.</param>
+        /// <param name="statusProgress">Receives status messages.</param>
+        /// <param name="percentProgress">Receives download progress.</param>
+        public async Task StartSelfUpdateAsync(Product product, string currentVersion, IProgress<string> statusProgress, IProgress<int> percentProgress)
         {
-            Log.Warn("Starting self-update...");
+            Log.Warn($"Starting self-update {currentVersion} -> {product.LatestVersion}...");
             // --- CHANGED: Use new GetFileManifestAsync signature ---
             FileManifest manifest = await _nextcloudClient.GetFileManifestAsync(product.Id, product.LatestVersion);
             string tempDir = Path.Combine(Path.GetTempPath(), "SCT_Updater_New");
@@ -680,9 +687,8 @@ namespace SCT_Updater
             string exeName = Path.GetFileName(Application.ExecutablePath);
             string currentDir = Application.StartupPath;
 
-            Log.Warn("Restarting via command line injection...");
-
-            // Use the new fileless method
+            Log.Warn($"Restarting through cmd.exe: moving {tempDir} over {currentDir}, then starting {exeName}.");
+            SelfUpdateGuard.Record(currentVersion, product.LatestVersion);
             Utility.RestartApp(currentDir, tempDir, exeName);
         }
 

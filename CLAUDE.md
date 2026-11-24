@@ -17,7 +17,7 @@ Release package: built by `app_release.py app .` with **MSBuild** (publish, Rele
 
 **Pattern:** WinForms, single-form application
 
-**Entry Point:** `Program.cs` → `Form1`
+**Entry Point:** `Program.cs` → `MainForm`
 
 **Key Classes:**
 
@@ -27,8 +27,9 @@ Release package: built by `app_release.py app .` with **MSBuild** (publish, Rele
 | `NextcloudClient` | HTTP/WebDAV client for Nextcloud (download, PROPFIND, manifest fetch) |
 | `UpdateService` | Core update logic: delta updates, ZIP updates, self-update, config sync |
 | `LocalStateService` | Reads/writes `local_versions.json` |
-| `Form1` | UI: update check, product list, install/reinstall buttons |
-| `Logger` | Thin wrapper around file + console logging |
+| `MainForm` | UI: update check, product list, install/reinstall buttons |
+| `Logger` | File log `logs/sct_updater.log` (rotated per run, run id on every line, header with system and locale) |
+| `SelfUpdateGuard` | Stops a self-update loop and imports the restart script report (robocopy log and exit code) |
 
 **Update flow:**
 1. `CheckForUpdatesAsync` fetches `suite_manifest.json` from Nextcloud

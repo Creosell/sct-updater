@@ -16,10 +16,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `app_release.py app`: the Updater and every other .NET project are released with the same tool as the modules (`sct_app.toml` with `kind = "dotnet"`; built with MSBuild into a clean folder, single-exe check, version read from the built exe, manifest published last)
 - The Updater deletes cached wheels (`apps/wheelhouse`) that no installed module uses after every install; `app_release.py gc` lists (`--delete` removes) wheels and Python archives on the server that no version in `products`/`dev` uses
 - `app` package mode for Python modules: shared embeddable Python in `apps/python_runtime`, module code and wheels in `apps/<module>` (wheels verified by SHA256, cached in `apps/wheelhouse`), clean migration from `zip`; see `docs/module-release.md`
-
 - `obsolete` list in `sct_app.toml` and in the manifest: the Updater deletes the listed old file names (renamed exes) from its root on install and update, for every package mode; replaces the hardcoded list for Screen Checker
+- Diagnostics: `logs/sct_updater.log` is no longer erased at startup (the last runs are kept as `sct_updater.1.log` .. `.4.log`), every line carries the run id, the log starts with a header (Updater version, channel, Windows, runtime, locale and code pages, install folder), errors are logged with the full exception, unhandled exceptions are logged too
+- The self-update restart script writes the robocopy log and exit code (`logs/self_update_robocopy.log`, `self_update_exit.txt`); the next run copies them into the main log. A self-update that did not replace the Updater is not repeated: the Updater shows an error instead of restarting in a loop
 
 ### Changed
+- `Form1` renamed to `MainForm`, `Utility.cs.cs` to `Utility.cs`
 - `description` removed from the suite manifest and the module grid
 - Ported to .NET 8 (`net8.0-windows`, SDK-style project, framework-dependent single-file `Updater.exe`); Costura.Fody and `packages.config` removed, the version now lives in `SCT_Updater.csproj`
 - New `app_release.py zip <folder> <product_id> <version>` releases any build folder

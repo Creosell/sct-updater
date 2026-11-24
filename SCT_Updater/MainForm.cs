@@ -1,4 +1,4 @@
-﻿// Form1.cs
+﻿// MainForm.cs
 using System;
 using System.Collections.Generic;
 using System.Data;
@@ -12,7 +12,7 @@ using System.Windows.Forms;
 
 namespace SCT_Updater
     {
-    public partial class Form1 : Form
+    public partial class MainForm : Form
         {
         // --- Services ---
         private readonly NextcloudClient _nextcloudClient;
@@ -23,7 +23,7 @@ namespace SCT_Updater
         private bool _isUpdating = false;
         private List<Product> _allProducts = new List<Product>();
 
-        public Form1()
+        public MainForm()
             {
             InitializeComponent();
 
@@ -35,6 +35,8 @@ namespace SCT_Updater
                 {
                 AppConfig.LoadEnvConfiguration();
                 Log.Debug(".env configuration loaded.");
+                Log.WriteHeader(GetCurrentVersion(), AppConfig.IsDevChannel ? "dev" : "stable");
+                SelfUpdateGuard.ImportRestartReport();
                 }
             catch (Exception ex)
                 {
@@ -142,7 +144,7 @@ namespace SCT_Updater
         #region Form Load and UI Setup
 
 
-        private async void Form1_Load(object sender, EventArgs e)
+        private async void MainForm_Load(object sender, EventArgs e)
             {
             if (_updateService == null)
                 {
@@ -213,7 +215,25 @@ namespace SCT_Updater
 
             try
                 {
-                var result = await _updateService.CheckForUpdatesAsync(GetCurrentVersion());
+                string currentVersion = GetCurrentVersion();
+                var result = await _updateService.CheckForUpdatesAsync(currentVersion);
+
+                if (result.SelfUpdateProduct == null && SelfUpdateGuard.ConfirmCompleted(currentVersion))
+                    {
+                    Log.Info($"Self-update to {currentVersion} completed.");
+                    }
+
+                if (result.SelfUpdateProduct != null && SelfUpdateGuard.HasFailedBefore(currentVersion, result.SelfUpdateProduct.LatestVersion))
+                    {
+                    string target = result.SelfUpdateProduct.LatestVersion;
+                    Log.Error(new InvalidOperationException("Updater.exe was not replaced"),
+                        $"Self-update {currentVersion} -> {target} did not replace the Updater; not retrying. See the restart report above.");
+                    lblStatus.Text = "Self-update failed.";
+                    MessageBox.Show($"The Updater was asked to switch from {currentVersion} to {target}, but the files were not replaced after the restart.\n\n" +
+                                    "The update is not repeated. Send logs\\sct_updater.log and logs\\sct_updater.1.log to the developer.",
+                                    "Self-update failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                    }
 
                 if (result.SelfUpdateProduct != null)
                     {
@@ -225,9 +245,7 @@ namespace SCT_Updater
                     IProgress<string> statusProgress = new Progress<string>(status => lblStatus.Text = status);
                     IProgress<int> percentProgress = new Progress<int>(percent => UpdateProgressBar(percent));
 
-                    await _updateService.StartSelfUpdateAsync(result.SelfUpdateProduct, statusProgress, percentProgress);
-
-                    LaunchStubAndExit();
+                    await _updateService.StartSelfUpdateAsync(result.SelfUpdateProduct, currentVersion, statusProgress, percentProgress);
                     return;
                     }
 
@@ -697,23 +715,6 @@ namespace SCT_Updater
         #endregion
 
         #region Helper Methods (Stub, UI)
-
-        private void LaunchStubAndExit()
-            {
-            Log.Warn("Launching update stub and exiting application.");
-            string exeName = Path.GetFileName(Application.ExecutablePath);
-            string currentDir = Application.StartupPath;
-
-            Process.Start(new ProcessStartInfo
-                {
-                FileName = Path.Combine(currentDir, AppConfig.UPDATE_STUB_FILENAME),
-                UseShellExecute = true,
-                Verb = "runas",
-                WorkingDirectory = currentDir
-                });
-
-            Application.Exit();
-            }
 
         private void UpdateProgressBar(int percent)
             {

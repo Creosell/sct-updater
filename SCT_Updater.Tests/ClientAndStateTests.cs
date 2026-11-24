@@ -98,6 +98,8 @@ namespace SCT_Updater.Tests
             string args = Utility.BuildRestartArguments(@"C:\SCT\", @"C:\Temp\SCT_Updater_New\", "Updater.exe");
 
             Assert.Contains(@"robocopy ""C:\Temp\SCT_Updater_New"" ""C:\SCT"" /E /IS /MOVE", args);
+            Assert.Contains(@"/LOG:""C:\SCT\logs\self_update_robocopy.log""", args);
+            Assert.Contains(@"call echo %^ERRORLEVEL% > ""C:\SCT\logs\self_update_exit.txt""", args);
             Assert.Contains(@"rmdir /s /q ""C:\Temp\SCT_Updater_New""", args);
             Assert.EndsWith(@"start """" ""C:\SCT\Updater.exe""", args);
         }
