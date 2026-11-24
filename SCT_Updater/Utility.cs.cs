@@ -21,6 +21,19 @@ namespace SCT_Updater
             }
         }
 
+        /// <summary>
+        /// Computes the SHA256 hash of a byte array.
+        /// </summary>
+        /// <param name="data">The data to hash.</param>
+        /// <returns>Lowercase hexadecimal SHA256 string.</returns>
+        public static string GetBytesHash(byte[] data)
+        {
+            using (var sha256 = SHA256.Create())
+            {
+                return BitConverter.ToString(sha256.ComputeHash(data)).Replace("-", "").ToLowerInvariant();
+            }
+        }
+
         public static void RestartApp(string currentDir, string tempDir, string exeName)
         {
             // Chain commands directly in arguments to avoid creating a .bat file on disk (Dropper behavior)

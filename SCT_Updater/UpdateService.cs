@@ -11,10 +11,26 @@ using System.Windows.Forms;
 
 namespace SCT_Updater
 {
-    public class UpdateService
+    /// <summary>Decision of the user when a file of the module being updated is in use.</summary>
+    public enum FileInUseChoice
+    {
+        /// <summary>Try the operation again (the application was closed or released the file).</summary>
+        Retry,
+        /// <summary>Abort the update.</summary>
+        Cancel
+    }
+
+    public partial class UpdateService
     {
         private readonly NextcloudClient _nextcloudClient;
         private readonly LocalStateService _localState;
+        private readonly SemaphoreSlim _fileInUseGate = new SemaphoreSlim(1, 1);
+
+        /// <summary>
+        /// Called when a file cannot be written or deleted because it is in use. Receives the product identifier and the
+        /// attempt number, and decides whether to retry or cancel. Calls are serialized. When null, the error is thrown as is.
+        /// </summary>
+        public Func<string, int, Task<FileInUseChoice>> FileInUseHandler { get; set; }
 
         private static readonly Dictionary<string, string[]> _legacyFiles = new Dictionary<string, string[]>
         {
@@ -91,7 +107,6 @@ namespace SCT_Updater
                 {
                     Id = AppConfig.DEVICE_CONFIGS_ID,
                     Name = "Device configs",
-                    Description = "Update device configs",
                     InstalledVersion = "-", // Per request
                     LatestVersion = "-",    // Per request
                     IsUpdateAvailable = !localFolderExists || serverFiles.Count != localFileCount
@@ -102,15 +117,14 @@ namespace SCT_Updater
             catch (Exception ex)
             {
                 Log.Error(ex, "Failed to check device configs. Skipping.");
-                // Optionally create a "failed" product
-                // productsToShow.Add(new Product { Id = AppConfig.DEVICE_CONFIGS_ID, Name = "Device configs", Description = "Error checking configs" });
             }
 
             // --- 2. Check Suite Manifest (existing logic) ---
-            Log.Debug("Checking suite manifest...");
+            Log.Debug($"Checking suite manifest (channel: {(AppConfig.IsDevChannel ? "dev" : "stable")})...");
             SuiteManifest suiteManifest = await _nextcloudClient.GetSuiteManifestAsync();
+            List<Product> channelProducts = suiteManifest.ResolveProducts(AppConfig.IsDevChannel);
 
-            Product self = suiteManifest.Products.FirstOrDefault(p => p.Id == AppConfig.UPDATER_ID);
+            Product self = channelProducts.FirstOrDefault(p => p.Id == AppConfig.UPDATER_ID);
             if (self != null && self.LatestVersion != currentVersion)
             {
                 Log.Warn($"Self-update required. Current: {currentVersion}, Server: {self.LatestVersion}");
@@ -121,13 +135,20 @@ namespace SCT_Updater
             Log.Debug("Self-update not required. Checking modules.");
             LocalVersions localData = _localState.LoadLocalVersions();
 
-            foreach (var serverProduct in suiteManifest.Products.Where(p => p.Id != AppConfig.UPDATER_ID))
+            var rebuiltChecks = new List<Task>();
+
+            foreach (var serverProduct in channelProducts.Where(p => p.Id != AppConfig.UPDATER_ID))
             {
                 InstalledProduct localProduct = localData.InstalledProducts.FirstOrDefault(p => p.Id == serverProduct.Id);
                 if (localProduct != null)
                 {
                     serverProduct.InstalledVersion = localProduct.Version;
                     serverProduct.IsUpdateAvailable = serverProduct.LatestVersion != localProduct.Version;
+
+                    if (!serverProduct.IsUpdateAvailable && !string.IsNullOrEmpty(localProduct.ManifestHash))
+                    {
+                        rebuiltChecks.Add(MarkIfRebuiltAsync(serverProduct, localProduct.ManifestHash));
+                    }
                 }
                 else
                 {
@@ -137,9 +158,35 @@ namespace SCT_Updater
                 productsToShow.Add(serverProduct);
             }
 
+            await Task.WhenAll(rebuiltChecks);
+
             result.ProductsToShow = productsToShow;
             Log.Debug($"Found {productsToShow.Count} total items (configs + modules).");
             return result;
+        }
+
+        /// <summary>
+        /// Compares the server file manifest hash with the installed one and flags the product as rebuilt
+        /// (same version, different package). Fetch errors are logged and leave the product untouched.
+        /// </summary>
+        /// <param name="product">Server product whose version equals the installed one.</param>
+        /// <param name="installedHash">Manifest hash recorded at install time.</param>
+        private async Task MarkIfRebuiltAsync(Product product, string installedHash)
+        {
+            try
+            {
+                var (_, serverHash) = await _nextcloudClient.FetchFileManifestAsync(product.Id, product.LatestVersion);
+                if (!serverHash.Equals(installedHash, StringComparison.OrdinalIgnoreCase))
+                {
+                    Log.Warn($"{product.Id} v{product.LatestVersion} was rebuilt on the server (manifest hash changed).");
+                    product.IsRebuilt = true;
+                    product.IsUpdateAvailable = true;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"Rebuild check skipped for {product.Id}: {ex.Message}");
+            }
         }
 
         // --- NEW: Method to sync device configs ---
@@ -251,7 +298,7 @@ namespace SCT_Updater
                     throw new Exception($"Failed to fetch the *old* manifest ({installedProduct.Version}) for deletion. Cannot continue re-install. Error: {ex.Message}", ex);
                 }
 
-                DeleteModuleFilesFromManifest(oldManifest);
+                await DeleteModuleFilesFromManifestAsync(oldManifest);
             }
             _localState.SaveLocalVersion(product.Id, "Not Installed");
 
@@ -260,7 +307,11 @@ namespace SCT_Updater
             FileManifest newManifest = await _nextcloudClient.GetFileManifestAsync(product.Id, product.LatestVersion);
 
             statusProgress.Report($"Starting re-installation for {product.Name}...");
-            if (newManifest.PackageMode == "zip")
+            if (newManifest.IsApp)
+            {
+                await InstallAppAsync(newManifest, null, statusProgress, percentProgress);
+            }
+            else if (newManifest.PackageMode == "zip")
             {
                 await StartModuleUpdate_Zip(newManifest, statusProgress, percentProgress);
             }
@@ -297,6 +348,15 @@ namespace SCT_Updater
             // --- CHANGED: Use new GetFileManifestAsync signature ---
             FileManifest oldManifest = await _nextcloudClient.GetFileManifestAsync(product.Id, installedProduct.Version);
 
+            if (newManifest.IsRuntimeShare && !oldManifest.IsRuntimeShare)
+            {
+                Log.Info($"Migrating {product.Id} to the runtime-share layout: clean install.");
+                statusProgress.Report("Removing the previous package layout...");
+                await DeleteModuleFilesFromManifestAsync(newManifest);
+                await StartModuleUpdate_Files(newManifest, new Dictionary<string, string>(), statusProgress, percentProgress);
+                return;
+            }
+
             statusProgress.Report("Comparing versions...");
             var oldFiles = oldManifest.Files.ToDictionary(f => f.Path, f => f.Hash);
             var newFiles = newManifest.Files.ToDictionary(f => f.Path, f => f.Hash);
@@ -329,11 +389,30 @@ namespace SCT_Updater
             }
         }
 
+        /// <summary>
+        /// Deletes all top-level files and folders of a manifest, asking the user what to do when one of them is in use.
+        /// </summary>
+        /// <param name="manifest">Manifest whose top-level items are removed.</param>
+        /// <exception cref="OperationCanceledException">The user cancelled while a file was in use.</exception>
+        public Task DeleteModuleFilesFromManifestAsync(FileManifest manifest) =>
+            RunWithFileInUseHandlingAsync(() =>
+            {
+                DeleteModuleFilesFromManifest(manifest);
+                return Task.CompletedTask;
+            }, manifest?.ProductId);
+
         public void DeleteModuleFilesFromManifest(FileManifest manifest)
         {
             if (manifest?.Files == null) return;
             Log.Debug($"Deleting all files from manifest for {manifest.ProductId}...");
             string root = Application.StartupPath;
+
+            if (manifest.IsApp)
+            {
+                DeleteAppFiles(manifest, root);
+                return;
+            }
+
             var topLevelItems = new HashSet<string>();
             foreach (var file in manifest.Files)
             {
@@ -435,6 +514,161 @@ namespace SCT_Updater
             }
         }
 
+        /// <summary>
+        /// Downloads one manifest file to <paramref name="localPath"/>. Files of a runtime-share manifest are
+        /// verified against their SHA256 before being written, so a corrupt blob never reaches the disk.
+        /// </summary>
+        /// <param name="manifest">Manifest the file belongs to.</param>
+        /// <param name="file">File entry to download.</param>
+        /// <param name="localPath">Destination path on disk.</param>
+        /// <param name="localIndex">
+        /// Hash to relative path of the files installed for other products; a matching, verified file is copied
+        /// instead of being downloaded. Used by runtime-share manifests only.
+        /// </param>
+        /// <exception cref="InvalidDataException">The downloaded content does not match the manifest hash.</exception>
+        /// <exception cref="OperationCanceledException">The user cancelled while the destination file was in use.</exception>
+        private async Task DownloadManifestFileAsync(FileManifest manifest, ManifestFile file, string localPath,
+            IReadOnlyDictionary<string, string> localIndex = null)
+        {
+            if (manifest.IsRuntimeShare)
+            {
+                string source = await FindLocalCopyAsync(file, localIndex);
+                if (source != null)
+                {
+                    await RunWithFileInUseHandlingAsync(() =>
+                    {
+                        File.Copy(source, localPath, true);
+                        return Task.CompletedTask;
+                    }, manifest.ProductId);
+                    return;
+                }
+            }
+
+            string url = _nextcloudClient.BuildManifestFileUrl(manifest, file);
+            byte[] data = await _nextcloudClient.DownloadFileBytesAsync(url);
+
+            if (manifest.IsRuntimeShare && !Utility.GetBytesHash(data).Equals(file.Hash, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException($"Hash mismatch for '{file.Path}' downloaded from {url}.");
+            }
+
+            await RunWithFileInUseHandlingAsync(() =>
+            {
+                File.WriteAllBytes(localPath, data);
+                return Task.CompletedTask;
+            }, manifest.ProductId);
+        }
+
+        /// <summary>
+        /// Looks for an already installed file with the content of a manifest file, so it can be copied instead of downloaded.
+        /// </summary>
+        /// <param name="file">Manifest file to find.</param>
+        /// <param name="localIndex">Hash to relative path of the files installed for other products.</param>
+        /// <returns>Full path of a verified local copy, or null when there is none.</returns>
+        private static async Task<string> FindLocalCopyAsync(ManifestFile file, IReadOnlyDictionary<string, string> localIndex)
+        {
+            if (localIndex == null || !localIndex.TryGetValue(file.Hash.ToLowerInvariant(), out string relativePath)) return null;
+
+            string candidate = Path.Combine(Application.StartupPath, relativePath);
+            try
+            {
+                if (File.Exists(candidate) && (await Utility.GetFileHashAsync(candidate)).Equals(file.Hash, StringComparison.OrdinalIgnoreCase))
+                {
+                    return candidate;
+                }
+            }
+            catch (IOException ex)
+            {
+                Log.Warn($"Local copy {relativePath} is not readable: {ex.Message}");
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Selects the files of a runtime-share manifest whose local copy is missing or has a different SHA256.
+        /// </summary>
+        /// <param name="manifest">Manifest to check against the files on disk.</param>
+        /// <returns>The files that must be fetched.</returns>
+        private static async Task<List<ManifestFile>> FindFilesToDownloadByHashAsync(FileManifest manifest)
+        {
+            var gate = new SemaphoreSlim(8);
+            var checks = manifest.Files.Select(async file =>
+            {
+                await gate.WaitAsync();
+                try
+                {
+                    string localPath = Path.Combine(Application.StartupPath, file.Path);
+                    bool upToDate = File.Exists(localPath)
+                        && (await Utility.GetFileHashAsync(localPath)).Equals(file.Hash, StringComparison.OrdinalIgnoreCase);
+                    return upToDate ? null : file;
+                }
+                catch (IOException)
+                {
+                    return file;
+                }
+                finally
+                {
+                    gate.Release();
+                }
+            });
+            return (await Task.WhenAll(checks)).Where(f => f != null).ToList();
+        }
+
+        /// <summary>
+        /// Detects the errors Windows raises for a file held open by a running program.
+        /// </summary>
+        /// <param name="ex">Exception thrown by a file operation.</param>
+        /// <returns>True for sharing/lock violations and access-denied errors, also when wrapped in another exception.</returns>
+        private static bool IsFileInUse(Exception ex)
+        {
+            for (Exception current = ex; current != null; current = current.InnerException)
+            {
+                if (current is UnauthorizedAccessException) return true;
+                if (current is IOException && ((current.HResult & 0xFFFF) == 32 || (current.HResult & 0xFFFF) == 33)) return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Runs a file operation; when it fails because a file is in use, asks <see cref="FileInUseHandler"/>
+        /// what to do and repeats the operation until it succeeds or the user cancels.
+        /// </summary>
+        /// <param name="action">File operation to run.</param>
+        /// <param name="productId">Product being updated, passed to the handler.</param>
+        /// <exception cref="OperationCanceledException">The handler returned <see cref="FileInUseChoice.Cancel"/>.</exception>
+        private async Task RunWithFileInUseHandlingAsync(Func<Task> action, string productId)
+        {
+            for (int attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    await action();
+                    return;
+                }
+                catch (Exception ex) when (FileInUseHandler != null && IsFileInUse(ex))
+                {
+                    Log.Warn($"File in use while updating {productId} (attempt {attempt}): {ex.Message}");
+
+                    FileInUseChoice choice;
+                    await _fileInUseGate.WaitAsync();
+                    try
+                    {
+                        choice = await FileInUseHandler(productId, attempt);
+                    }
+                    finally
+                    {
+                        _fileInUseGate.Release();
+                    }
+
+                    if (choice == FileInUseChoice.Cancel)
+                    {
+                        throw new OperationCanceledException($"Update of {productId} cancelled: a file is in use.", ex);
+                    }
+                    await Task.Delay(500);
+                }
+            }
+        }
+
         public async Task StartModuleUpdate_Files(FileManifest newManifest, Dictionary<string, string> oldFiles, IProgress<string> statusProgress, IProgress<int> percentProgress)
         {
             Log.Debug($"Starting FILES update for {newManifest.ProductId}...");
@@ -446,18 +680,29 @@ namespace SCT_Updater
             var filesToDownload = new List<ManifestFile>();
 
             // --- DELTA LOGIC ---
-            foreach (var newFile in newManifest.Files)
+            IReadOnlyDictionary<string, string> localIndex = null;
+            if (newManifest.IsRuntimeShare)
             {
-                if (oldFiles.TryGetValue(newFile.Path, out string oldHash) && oldHash == newFile.Hash)
+                // Runtime-share: trust the disk, not the old manifest; every file is compared by SHA256
+                filesToDownload = await FindFilesToDownloadByHashAsync(newManifest);
+                filesDone = newManifest.Files.Count - filesToDownload.Count;
+                localIndex = _localState.GetLocalFileIndex(newManifest.ProductId);
+            }
+            else
+            {
+                foreach (var newFile in newManifest.Files)
                 {
-                    string localPath = Path.Combine(Application.StartupPath, newFile.Path);
-                    if (File.Exists(localPath))
+                    if (oldFiles.TryGetValue(newFile.Path, out string oldHash) && oldHash == newFile.Hash)
                     {
-                        filesDone++;
-                        continue;
+                        string localPath = Path.Combine(Application.StartupPath, newFile.Path);
+                        if (File.Exists(localPath))
+                        {
+                            filesDone++;
+                            continue;
+                        }
                     }
+                    filesToDownload.Add(newFile);
                 }
-                filesToDownload.Add(newFile);
             }
             Log.Debug($"Found {filesToDownload.Count} files to download. {filesDone} files are already up-to-date.");
 
@@ -478,9 +723,7 @@ namespace SCT_Updater
                     await semaphore.WaitAsync();
                     try
                     {
-                        string fullFileUrl = _nextcloudClient.BuildFullFileUrl(newManifest.BaseUrl, file.Path);
-                        byte[] fileData = await _nextcloudClient.DownloadFileBytesAsync(fullFileUrl);
-                        File.WriteAllBytes(localPath, fileData);
+                        await DownloadManifestFileAsync(newManifest, file, localPath, localIndex);
 
                         int done = Interlocked.Increment(ref filesDone);
                         percentProgress.Report((int)((double)done / newManifest.Files.Count * 100));
@@ -578,9 +821,7 @@ namespace SCT_Updater
                     await semaphore.WaitAsync();
                     try
                     {
-                        string fullFileUrl = _nextcloudClient.BuildFullFileUrl(manifest.BaseUrl, file.Path);
-                        byte[] fileData = await _nextcloudClient.DownloadFileBytesAsync(fullFileUrl);
-                        File.WriteAllBytes(localPath, fileData);
+                        await DownloadManifestFileAsync(manifest, file, localPath);
 
                         int done = Interlocked.Increment(ref filesDone);
                         percentProgress.Report((int)((double)done / manifest.Files.Count * 100));

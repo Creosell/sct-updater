@@ -20,6 +20,15 @@ namespace SCT_Updater
             _httpClient = CreateNextcloudHttpClient();
         }
 
+        /// <summary>
+        /// Creates the client over a preconfigured <see cref="HttpClient"/>.
+        /// </summary>
+        /// <param name="httpClient">Client used for every request.</param>
+        public NextcloudClient(HttpClient httpClient)
+        {
+            _httpClient = httpClient;
+        }
+
         private HttpClient CreateNextcloudHttpClient()
         {
             var client = new HttpClient();
@@ -167,6 +176,42 @@ namespace SCT_Updater
             return fullFileUrl;
         }
 
+        /// <summary>
+        /// Resolves the download URL of a manifest file: the shared store (by hash) for runtime-share
+        /// manifests, the version folder (by path) otherwise.
+        /// </summary>
+        /// <param name="manifest">Manifest the file belongs to.</param>
+        /// <param name="file">File entry to download.</param>
+        /// <returns>Absolute WebDAV URL of the file.</returns>
+        public string BuildManifestFileUrl(FileManifest manifest, ManifestFile file)
+        {
+            if (!manifest.IsRuntimeShare) return BuildFullFileUrl(manifest.BaseUrl, file.Path);
+
+            string storeUrl = string.IsNullOrEmpty(manifest.StoreUrl) ? AppConfig.DEFAULT_STORE_URL : manifest.StoreUrl;
+            string hash = file.Hash.ToLowerInvariant();
+            return BuildFullFileUrl(storeUrl, $"{hash.Substring(0, 2)}/{hash}");
+        }
+
+        /// <summary>
+        /// Fetches the descriptor of the embeddable Python archive published for a minor version.
+        /// </summary>
+        /// <param name="minor">Python minor version, e.g. "3.13".</param>
+        /// <returns>Version, archive file name, SHA256 and size.</returns>
+        public async Task<PythonCoreInfo> GetPythonCoreAsync(string minor)
+        {
+            string url = $"{AppConfig.NC_WEBDAV_BASE_URL}/runtime/python_{minor}.json";
+            Log.Debug($"Fetching Python core descriptor: {url}");
+            return JsonConvert.DeserializeObject<PythonCoreInfo>(await _httpClient.GetStringAsync(url));
+        }
+
+        /// <summary>
+        /// Builds the download URL of the embeddable Python archive.
+        /// </summary>
+        /// <param name="core">Descriptor returned by <see cref="GetPythonCoreAsync"/>.</param>
+        /// <returns>Absolute WebDAV URL of the archive.</returns>
+        public string BuildPythonArchiveUrl(PythonCoreInfo core) =>
+            $"{AppConfig.NC_WEBDAV_BASE_URL}/runtime/python/{core.File}";
+
         public async Task<SuiteManifest> GetSuiteManifestAsync()
         {
             Log.Debug($"Fetching suite manifest: {AppConfig.SUITE_MANIFEST_URL}");
@@ -180,6 +225,17 @@ namespace SCT_Updater
         /// </summary>
         public async Task<FileManifest> GetFileManifestAsync(string productId, string version)
         {
+            return (await FetchFileManifestAsync(productId, version)).Manifest;
+        }
+
+        /// <summary>
+        /// Fetches a file manifest together with the SHA256 hash of its raw server bytes.
+        /// </summary>
+        /// <param name="productId">Product identifier.</param>
+        /// <param name="version">Product version.</param>
+        /// <returns>The parsed manifest and the hash of the downloaded manifest file.</returns>
+        public async Task<(FileManifest Manifest, string Hash)> FetchFileManifestAsync(string productId, string version)
+        {
             // Build the path and filename based on the new convention
             // e.g., versions/nextcloud_cli/nextcloud_cli_1.0.2.json
             string manifestName = $"{productId}_{version}.json";
@@ -189,8 +245,13 @@ namespace SCT_Updater
             string fullManifestUrl = $"{AppConfig.NC_WEBDAV_BASE_URL}/{manifestPath}";
 
             Log.Debug($"Fetching file manifest: {fullManifestUrl}");
-            string json = await _httpClient.GetStringAsync(fullManifestUrl);
-            return JsonConvert.DeserializeObject<FileManifest>(json);
+            byte[] bytes = await _httpClient.GetByteArrayAsync(fullManifestUrl);
+            string json;
+            using (var reader = new StreamReader(new MemoryStream(bytes), Encoding.UTF8, true))
+            {
+                json = reader.ReadToEnd();
+            }
+            return (JsonConvert.DeserializeObject<FileManifest>(json), Utility.GetBytesHash(bytes));
         }
 
         public async Task<byte[]> DownloadFileBytesAsync(string fileUrl)

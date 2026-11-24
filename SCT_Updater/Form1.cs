@@ -46,8 +46,97 @@ namespace SCT_Updater
 
             _nextcloudClient = new NextcloudClient();
             _localState = new LocalStateService();
-            _updateService = new UpdateService(_nextcloudClient, _localState);
+            _updateService = new UpdateService(_nextcloudClient, _localState) { FileInUseHandler = HandleFileInUseAsync };
             Log.Debug("Services initialized.");
+            }
+
+        /// <summary>
+        /// Resolves a "file is in use" error: closes the running module applications on request,
+        /// or lets the user close them manually, or cancels the update.
+        /// </summary>
+        /// <param name="productId">Product being updated.</param>
+        /// <param name="attempt">Number of the failed attempt for the current operation.</param>
+        /// <returns>Retry after the application was closed, Cancel to abort the update.</returns>
+        private async Task<FileInUseChoice> HandleFileInUseAsync(string productId, int attempt)
+            {
+            List<Process> running = FindRunningModuleProcesses();
+            try
+                {
+                // Nothing of ours holds the file: give a transient lock (e.g. antivirus scan) a few silent retries first
+                if (!running.Any() && attempt <= 3) return FileInUseChoice.Retry;
+
+                string apps = running.Any() ? string.Join(", ", running.Select(p => p.ProcessName).Distinct()) : "another program";
+                string text = $"The application is currently in use ({apps}).\n\n" +
+                              "Close it and continue the update?\n\n" +
+                              "Yes - close the application and continue\n" +
+                              "No - cancel the update";
+
+                DialogResult answer = InvokeRequired
+                    ? (DialogResult)Invoke(new Func<DialogResult>(() => MessageBox.Show(this, text, "Application in use", MessageBoxButtons.YesNo, MessageBoxIcon.Warning)))
+                    : MessageBox.Show(this, text, "Application in use", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+
+                if (answer != DialogResult.Yes) return FileInUseChoice.Cancel;
+                await Task.Run(() => CloseProcesses(running));
+                return FileInUseChoice.Retry;
+                }
+            finally
+                {
+                foreach (var process in running) process.Dispose();
+                }
+            }
+
+        /// <summary>
+        /// Finds the running processes whose executable lives in the application folder, except the updater itself.
+        /// </summary>
+        /// <returns>Processes started from the application folder; the caller disposes them.</returns>
+        private static List<Process> FindRunningModuleProcesses()
+            {
+            string root = Application.StartupPath.TrimEnd('\\', '/') + "\\";
+            int ownId = Process.GetCurrentProcess().Id;
+            var found = new List<Process>();
+
+            foreach (var process in Process.GetProcesses())
+                {
+                try
+                    {
+                    if (process.Id != ownId && process.MainModule.FileName.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+                        {
+                        found.Add(process);
+                        continue;
+                        }
+                    }
+                catch (Exception)
+                    {
+                    // Access to the module list of protected or exiting processes is denied; they cannot be ours
+                    }
+                process.Dispose();
+                }
+            return found;
+            }
+
+        /// <summary>
+        /// Asks each process to close its main window and kills the ones that do not exit in time.
+        /// </summary>
+        /// <param name="processes">Processes to close.</param>
+        private static void CloseProcesses(IEnumerable<Process> processes)
+            {
+            foreach (var process in processes)
+                {
+                try
+                    {
+                    Log.Warn($"Closing running application: {process.ProcessName} ({process.Id})");
+                    process.CloseMainWindow();
+                    if (!process.WaitForExit(3000))
+                        {
+                        process.Kill();
+                        process.WaitForExit(3000);
+                        }
+                    }
+                catch (Exception ex)
+                    {
+                    Log.Warn($"Could not close {process.ProcessName}: {ex.Message}");
+                    }
+                }
             }
 
         #region Form Load and UI Setup
@@ -55,7 +144,14 @@ namespace SCT_Updater
 
         private async void Form1_Load(object sender, EventArgs e)
             {
-            this.Text = $"Updater {GetCurrentVersion()}";
+            if (_updateService == null)
+                {
+                // The .env configuration failed to load: no services exist, so nothing may contact the server
+                Close();
+                return;
+                }
+
+            this.Text = $"Updater {GetCurrentVersion()}{(AppConfig.IsDevChannel ? " [DEV]" : string.Empty)}";
             lblStatus.Text = "Configuring UI...";
             SetupDataGridView();
             dgvModules.DataSource = null;
@@ -78,7 +174,6 @@ namespace SCT_Updater
             dgvModules.Columns.Add(new DataGridViewTextBoxColumn { Name = "ModuleName", HeaderText = "Module", DataPropertyName = "Name", ReadOnly = true, FillWeight = 150 });
             dgvModules.Columns.Add(new DataGridViewTextBoxColumn { Name = "Installed", HeaderText = "Installed", DataPropertyName = "InstalledVersion", ReadOnly = true, FillWeight = 70 });
             dgvModules.Columns.Add(new DataGridViewTextBoxColumn { Name = "Available", HeaderText = "Available", DataPropertyName = "LatestVersion", ReadOnly = true, FillWeight = 70 });
-            dgvModules.Columns.Add(new DataGridViewTextBoxColumn { Name = "Description", HeaderText = "Description", DataPropertyName = "Description", ReadOnly = true, DefaultCellStyle = new DataGridViewCellStyle { WrapMode = DataGridViewTriState.True }, FillWeight = 200 });
 
             // --- Re-install column (using your saved preference) ---
             var reloadColumn = new DataGridViewButtonColumn
@@ -108,7 +203,11 @@ namespace SCT_Updater
 
         #region Update Check and UI State
 
-        private async Task RunUpdateCheck()
+        /// <summary>
+        /// Runs the update check and refreshes the grid.
+        /// </summary>
+        /// <param name="offerRebuilt">When true, offers to reinstall products rebuilt on the server under the same version.</param>
+        private async Task RunUpdateCheck(bool offerRebuilt = true)
             {
             SetUiState(isChecking: true);
 
@@ -154,6 +253,33 @@ namespace SCT_Updater
                 {
                 SetUiState(isChecking: false);
                 }
+
+            if (offerRebuilt) await OfferRebuiltReinstallAsync();
+            }
+
+        /// <summary>
+        /// Offers (default Yes) to reinstall products whose package was rebuilt on the server under the same version.
+        /// </summary>
+        private async Task OfferRebuiltReinstallAsync()
+            {
+            var rebuilt = _allProducts.Where(p => p.IsRebuilt).ToList();
+            if (!rebuilt.Any()) return;
+
+            string names = string.Join("\n", rebuilt.Select(p => $"• {p.Name} {p.LatestVersion}"));
+            var answer = MessageBox.Show(
+                $"These packages were rebuilt on the server under the same version:\n\n{names}\n\nReinstall them now?",
+                "Package rebuilt",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question,
+                MessageBoxDefaultButton.Button1);
+            if (answer != DialogResult.Yes) return;
+
+            SetUiState(isChecking: true);
+            foreach (var product in rebuilt)
+                {
+                await RunUpdateTask(product, isReinstall: true);
+                }
+            SetUiState(isChecking: false);
             }
 
         private string GetCurrentVersion()
@@ -231,7 +357,7 @@ namespace SCT_Updater
                     // 1. Configure "UpdateAction" (Install/Update/Checkmark) button
                     if (product.IsUpdateAvailable)
                         {
-                        updateButtonCell.Value = ( product.InstalledVersion == "Not Installed" ) ? "Install" : "Update";
+                        updateButtonCell.Value = product.IsRebuilt ? "Rebuilt" : ( product.InstalledVersion == "Not Installed" ) ? "Install" : "Update";
                         updateButtonCell.Style.BackColor = Color.LightGreen;
                         updateButtonCell.Style.ForeColor = Color.Black;
                         updateButtonCell.FlatStyle = FlatStyle.Popup;
@@ -360,7 +486,7 @@ namespace SCT_Updater
                 else
                     {
                     lblStatus.Text = $"Updating {product.Name}...";
-                    await RunUpdateTask(product, isReinstall: false);
+                    await RunUpdateTask(product, isReinstall: product.IsRebuilt);
                     }
                 }
 
@@ -395,7 +521,7 @@ namespace SCT_Updater
                     return;
                     }
                 Log.Info($"'Update/Install' button clicked for {productToUpdate.Id}");
-                isReinstall = false;
+                isReinstall = productToUpdate.IsRebuilt;
                 }
             else if (e.ColumnIndex == dgvModules.Columns["ReinstallAction"].Index)
                 {
@@ -548,18 +674,31 @@ namespace SCT_Updater
             IProgress<int> percentProgress = new Progress<int>(percent => UpdateProgressBar(percent));
 
             bool success = false;
+            string manifestHash = null;
+            Dictionary<string, string> installedFiles = null;
 
             try
                 {
+                var (manifest, hash) = await _nextcloudClient.FetchFileManifestAsync(product.Id, product.LatestVersion);
+                manifestHash = hash;
+                if (manifest.IsRuntimeShare)
+                    {
+                    installedFiles = manifest.Files.GroupBy(f => f.Path).ToDictionary(g => g.Key, g => g.First().Hash);
+                    }
+
                 if (isReinstall)
                     {
                     await _updateService.ReinstallModuleAsync(product, statusProgress, percentProgress);
                     }
                 else
                     {
-                    FileManifest manifest = await _nextcloudClient.GetFileManifestAsync(product.Id, product.LatestVersion);
 
-                    if (manifest.PackageMode == "zip")
+                    if (manifest.IsApp)
+                        {
+                        Log.Debug("Task mode: APP (code + wheels)");
+                        await _updateService.RunAppUpdateAsync(product, statusProgress, percentProgress);
+                        }
+                    else if (manifest.PackageMode == "zip")
                         {
                         Log.Debug("Task mode: ZIP");
                         await _updateService.StartModuleUpdate_Zip(manifest, statusProgress, percentProgress);
@@ -575,12 +714,17 @@ namespace SCT_Updater
                 success = true;
                 Log.Info($"Task '{action}' for {product.Id} successful.");
                 }
+            catch (OperationCanceledException ex)
+                {
+                Log.Warn($"Task '{action}' for {product.Id} cancelled by the user: {ex.Message}");
+                await RunUpdateCheck(offerRebuilt: false);
+                }
             catch (Exception ex)
                 {
                 Log.Error(ex, $"Task '{action}' for {product.Id} failed.");
                 MessageBox.Show($"Failed to {action.ToLower()} {product.Name}: {ex.Message}", "Task Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 // Re-check state on failure
-                await RunUpdateCheck();
+                await RunUpdateCheck(offerRebuilt: false);
                 }
             finally
                 {
@@ -590,9 +734,10 @@ namespace SCT_Updater
                 if (success)
                     {
                     // 1. Update the data object
-                    _localState.SaveLocalVersion(product.Id, product.LatestVersion);
+                    _localState.SaveLocalVersion(product.Id, product.LatestVersion, manifestHash, installedFiles);
                     product.InstalledVersion = product.LatestVersion;
                     product.IsUpdateAvailable = false;
+                    product.IsRebuilt = false;
                     }
 
                 // 2. Force the BindingSource to re-read the *entire* list

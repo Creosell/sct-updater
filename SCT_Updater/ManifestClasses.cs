@@ -8,6 +8,21 @@ namespace SCT_Updater
     {
         [JsonProperty("products")]
         public List<Product> Products { get; set; }
+
+        [JsonProperty("dev")]
+        public List<Product> Dev { get; set; }
+
+        /// <summary>
+        /// Returns the product list for the requested channel. The dev channel uses the
+        /// <c>dev</c> list when it is present and non-empty, otherwise the stable <c>products</c> list.
+        /// </summary>
+        /// <param name="devChannel">True to resolve the dev channel; false for stable.</param>
+        /// <returns>The product list of the resolved channel; never null.</returns>
+        public List<Product> ResolveProducts(bool devChannel)
+        {
+            if (devChannel && Dev != null && Dev.Count > 0) return Dev;
+            return Products ?? new List<Product>();
+        }
     }
 
     public class Product
@@ -18,12 +33,13 @@ namespace SCT_Updater
         public string Name { get; set; }
         [JsonProperty("latest_version")]
         public string LatestVersion { get; set; }
-        [JsonProperty("description")]
-        public string Description { get; set; }
 
         // Local-only fields
         public string InstalledVersion { get; set; } = "Not Installed";
         public bool IsUpdateAvailable { get; set; } = false;
+
+        /// <summary>True when the installed version matches the server one but the package manifest hash differs.</summary>
+        public bool IsRebuilt { get; set; } = false;
     }
 
     public class LocalVersions
@@ -38,6 +54,10 @@ namespace SCT_Updater
         public string Id { get; set; }
         [JsonProperty("version")]
         public string Version { get; set; }
+        [JsonProperty("manifest_hash", NullValueHandling = NullValueHandling.Ignore)]
+        public string ManifestHash { get; set; } // SHA256 of the file manifest that was installed
+        [JsonProperty("files", NullValueHandling = NullValueHandling.Ignore)]
+        public Dictionary<string, string> Files { get; set; } // Relative path to SHA256 of an installed runtime-share product; null otherwise
     }
 
     public class FileManifest
@@ -49,9 +69,49 @@ namespace SCT_Updater
         [JsonProperty("base_url")]
         public string BaseUrl { get; set; }
         [JsonProperty("package_mode")]
-        public string PackageMode { get; set; } // "zip" or "files"
+        public string PackageMode { get; set; } // "zip", "files" or "runtime-share"
+        [JsonProperty("store_url", NullValueHandling = NullValueHandling.Ignore)]
+        public string StoreUrl { get; set; } // Shared blob store, runtime-share only
         [JsonProperty("files")]
         public List<ManifestFile> Files { get; set; }
+
+        /// <summary>True when every file is fetched from the shared blob store by its hash.</summary>
+        [JsonIgnore]
+        public bool IsRuntimeShare => PackageMode == AppConfig.PACKAGE_MODE_RUNTIME_SHARE;
+
+        [JsonProperty("python", NullValueHandling = NullValueHandling.Ignore)]
+        public string Python { get; set; } // Python minor version of an "app" package, e.g. "3.13"
+        [JsonProperty("wheels_url", NullValueHandling = NullValueHandling.Ignore)]
+        public string WheelsUrl { get; set; } // Wheel store of an "app" package, relative to the Updater root
+        [JsonProperty("wheels", NullValueHandling = NullValueHandling.Ignore)]
+        public List<ManifestWheel> Wheels { get; set; }
+
+        /// <summary>True for a Python module installed as code plus wheels under apps/&lt;module&gt;.</summary>
+        [JsonIgnore]
+        public bool IsApp => PackageMode == AppConfig.PACKAGE_MODE_APP;
+    }
+
+    public class ManifestWheel
+    {
+        [JsonProperty("file")]
+        public string File { get; set; }
+        [JsonProperty("sha256")]
+        public string Sha256 { get; set; }
+        [JsonProperty("size")]
+        public long Size { get; set; }
+    }
+
+    /// <summary>The embeddable Python archive published for a minor version.</summary>
+    public class PythonCoreInfo
+    {
+        [JsonProperty("version")]
+        public string Version { get; set; }
+        [JsonProperty("file")]
+        public string File { get; set; }
+        [JsonProperty("sha256")]
+        public string Sha256 { get; set; }
+        [JsonProperty("size")]
+        public long Size { get; set; }
     }
 
     public class ManifestFile
