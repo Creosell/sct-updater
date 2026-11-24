@@ -53,12 +53,16 @@ Current version: **1.2.0** (set in `Updater\Updater.csproj` — `AssemblyVersion
 
 ## Releasing
 
+Environment setup for a release machine and the release flow: [docs/release-setup.md](docs/release-setup.md).
+
 See [README.md](README.md#releasing) for full release instructions.
 
 Release command (from repo root; `sct_app.toml` in the root describes the project, the tool builds it with MSBuild into a clean folder, reads the version from Updater.exe, and without `--upload` it is a dry run):
 ```bash
 uv run tools/release/app_release.py app . --upload
 ```
+
+The tool accepts repository aliases instead of paths (`updater`, `nextcloud-cli`, `report-generator`, `screen-checker`; see `REPO_ALIASES` in `app_release.py`); a PowerShell profile function `app-release` (see README) runs it from any folder: `app-release app report-generator 1.5.2 --upload`.
 
 Any other build folder (for example Screen Checker) is released with `uv run tools/release/app_release.py zip <folder> <product_id> <version> --upload`.
 

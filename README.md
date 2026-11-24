@@ -30,7 +30,7 @@ NC_PASSWORD_QA=your_app_password
 
 ## Releasing
 
-The Updater and all Python modules are released with one tool, `tools/release/app_release.py`. Requires [uv](https://docs.astral.sh/uv/) with an active virtual environment that has the dependencies installed.
+The Updater and all Python modules are released with one tool, `tools/release/app_release.py`. Setup of a release machine (uv, MSBuild, Rust, credentials, aliases) and the daily flow: [docs/release-setup.md](docs/release-setup.md).
 
 ### Build specifics
 
@@ -49,6 +49,8 @@ From the repo root (without `--upload` it is a dry run: the Updater is built and
 ```bash
 uv run tools/release/app_release.py app . --upload
 ```
+
+**Aliases and the `app-release` command.** Instead of a repository path the tool takes an alias (`updater`, `nextcloud-cli`, `report-generator`, `screen-checker`; case, `_` and the `sct-` prefix do not matter, so the repository name and the product id work too; the paths are the `REPO_ALIASES` constants at the top of `tools/release/app_release.py`). To run the tool from any folder, put a function in the PowerShell profile (`notepad $PROFILE`; `PATH` stays untouched): `function app-release { uv run --script <repo>\tools\release\app_release.py @args }` and, optionally, `Set-Alias app_release app-release`. Then: `app-release app updater --upload`, `app-release app report-generator 1.5.2 --upload`.
 
 `sct_app.toml` in the repository root (`kind = "dotnet"`, project and exe name) tells the tool what to build. It publishes the project with MSBuild (Release) into the clean folder `release_artifacts/build/suite_updater`, so the package is never stale and holds nothing but the fresh build. The Updater must stay a single exe; the tool refuses to package a build with loose dlls. The version is read from the built `Updater.exe` (`AssemblyVersion` / `FileVersion` in `Updater.csproj`); a version given on the command line must match it. The tool zips the folder, uploads the zip to `SCT/Updater/versions/suite_updater/<version>/` and publishes the manifest last. The files are also written to `release_artifacts/` (gitignored).
 

@@ -3,14 +3,15 @@
 This is the single reference for how Python modules (Nextcloud CLI, Report Generator, ...) are packaged, released and
 installed by the Updater. Every module repository links here from its own README and CLAUDE.md. **When anything about the
 release process changes, update this file and the module instructions together.**
+To prepare a machine for releasing, start with [release-setup.md](release-setup.md).
 
 ## Status
 
 | Part | State |
 |------|-------|
-| Release tool `tools/release/app_release.py` (`app`, `upgrade`, `zip`, `gc`; the lock file is maintained automatically) | Implemented, 63 tests, verified by real releases of both modules |
+| Release tool `tools/release/app_release.py` (`app`, `upgrade`, `zip`, `gc`; the lock file is maintained automatically) | Implemented, 74 tests, verified by real releases of both modules |
 | Wheel installer `WheelInstaller` (Updater) | Implemented, tested against real wheels |
-| Updater support for `package_mode: app` (Python core, code delta, wheels, reinstall, migration from zip) | Implemented, 49 Updater tests; verified on the dev channel (2026-11-24): self-update 1.1.1 -> 1.2.0, installation of all modules through the Updater |
+| Updater support for `package_mode: app` (Python core, code delta, wheels, reinstall, migration from zip) | Implemented, 60 Updater tests; verified on the dev channel (2026-11-24): self-update 1.1.1 -> 1.2.0, installation of all modules through the Updater |
 | Rust launcher (`launcher/`), built per module by `app_release.py` | Implemented, 4 unit tests, end-to-end checked with the real embeddable Python |
 | Modules prepared for this scheme: Nextcloud CLI and Report Generator (`sct_app.toml`, `requirements.in/.lock`) | Installed through the Updater on the dev channel (CLI 1.3.0, Report Generator 1.6.0): reports are generated and uploaded |
 | Legacy PyInstaller/zip release path (`release_manager.py`, specs, PyInstaller dependencies) | Removed from the Updater and module repositories (stage 7) |
@@ -65,10 +66,12 @@ Nextcloud credentials, and [uv](https://docs.astral.sh/uv/).
 # Release a module version: code, missing wheels, Python (if the server lacks it), manifest last.
 # The lock file is updated automatically when requirements.in changed (commit it).
 # Without --upload it is a dry run: the manifest is prepared and nothing is sent.
-uv run tools/release/app_release.py app D:\Python_scripts\Nextcloud_CLI 1.3.0 --upload
+uv run tools/release/app_release.py app nextcloud-cli 1.3.0 --upload
+# The same with an alias (updater, nextcloud-cli, report-generator, screen-checker; see REPO_ALIASES) and, with the `app-release` function of the PowerShell profile (see README), from any folder:
+app-release app nextcloud-cli 1.3.0 --upload
 
 # Move the pinned dependency versions to the newest ones requirements.in allows
-uv run tools/release/app_release.py upgrade D:\Python_scripts\Nextcloud_CLI
+uv run tools/release/app_release.py upgrade nextcloud-cli
 
 # List the wheels and Python archives on the server that no listed version uses; --delete removes them
 uv run tools/release/app_release.py gc
@@ -117,8 +120,8 @@ understand that manifest.
 ## Testing
 
 ```bash
-dotnet test Updater.Tests/Updater.Tests.csproj     # Updater (49 tests)
-python -m pytest tools/release/tests                       # release tool (63 tests)
+dotnet test Updater.Tests/Updater.Tests.csproj     # Updater (60 tests)
+python -m pytest tools/release/tests                       # release tool (74 tests)
 cd launcher && SCT_APP=demo cargo test                    # launcher (4 tests)
 ```
 

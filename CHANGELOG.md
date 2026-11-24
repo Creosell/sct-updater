@@ -20,6 +20,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Diagnostics: `logs/sct_updater.log` is no longer erased at startup (the last runs are kept as `sct_updater.1.log` .. `.4.log`), every line carries the run id, the log starts with a header (Updater version, channel, Windows, runtime, locale and code pages, install folder), errors are logged with the full exception, unhandled exceptions are logged too
 - The self-update restart script writes the robocopy log and exit code (`logs/self_update_robocopy.log`, `self_update_exit.txt`); the next run copies them into the main log. A self-update that did not replace the Updater is not repeated: the Updater shows an error instead of restarting in a loop
 
+- `docs/release-setup.md`: quick start for a release machine (tools, credentials, aliases, release flow, troubleshooting)
+- `app_release.py`: repository aliases instead of paths (`updater`, `nextcloud-cli`, `report-generator`, `screen-checker`); the README shows a PowerShell profile function `app-release` to run the tool from any folder
+
 ### Changed
 - `Form1` renamed to `MainForm`, `Utility.cs.cs` to `Utility.cs`
 - `description` removed from the suite manifest and the module grid

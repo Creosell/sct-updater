@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import hashlib
 import json
@@ -221,6 +222,32 @@ def test_zip_package_carries_the_obsolete_files(tmp_path):
     assert json.loads(manifest_path.read_text(encoding="utf-8"))["obsolete"] == ["Old.exe"]
     with pytest.raises(ValueError, match="obsolete"):
         ar.build_zip_package(folder, "demo", "1.0.1", tmp_path, ["New.exe"])
+
+
+def test_resolve_repo_accepts_aliases_in_any_case_and_plain_paths(tmp_path, monkeypatch):
+    monkeypatch.setitem(ar.REPO_ALIASES, "demo", tmp_path)
+
+    assert ar.resolve_repo("demo") == tmp_path
+    assert ar.resolve_repo("DEMO") == tmp_path
+    assert ar.resolve_repo(str(tmp_path)) == tmp_path
+
+
+def test_resolve_repo_rejects_an_unknown_name_and_lists_the_aliases():
+    with pytest.raises(argparse.ArgumentTypeError, match="aliases: updater"):
+        ar.resolve_repo("no-such-repository")
+
+
+def test_alias_key_ignores_case_underscores_and_the_sct_and_suite_prefixes():
+    for spelling in ("updater", "Updater", "sct-updater", "SCT_Updater", "suite_updater"):
+        assert ar.alias_key(spelling) == "updater"
+    assert ar.alias_key("Report_Generator") == ar.alias_key("sct-report-generator") == "report-generator"
+
+
+def test_every_alias_resolves_to_a_product_repository_by_name_and_product_id():
+    assert ar.REPO_ALIASES["updater"] == ar.REPO_ROOT
+    for spelling, alias in (("nextcloud_cli", "nextcloud-cli"), ("report_generator", "report-generator"),
+                            ("screen_checker", "screen-checker"), ("suite_updater", "updater")):
+        assert ar.REPO_ALIASES[ar.alias_key(spelling)] == ar.REPO_ALIASES[alias]
 
 
 # --- upload ---

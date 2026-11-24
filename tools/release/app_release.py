@@ -15,6 +15,13 @@ comes from ``.python-version``, its dependencies from ``requirements.in`` and ``
 uploads the module code, the wheels of its lock file (only those the server lacks), the embeddable Python
 (only when the server lacks it) and a manifest. Modules are independent: each has its own dependencies.
 
+Where a command takes a repository (app, upgrade) it accepts an alias from REPO_ALIASES instead of the path:
+updater, nextcloud-cli, report-generator, screen-checker (case, "_" and the "sct-" prefix do not matter, so the
+repository name and the product id work too); the paths are constants at the top of this file.
+A PowerShell profile function runs the tool from any folder:
+    function app-release { uv run --script <repo>\tools\release\app_release.py @args }
+    app-release app report-generator 1.5.2 --upload
+
 Commands (the wheel cache is the folder in the SCT_WHEELHOUSE environment variable, default ~/.sct_wheelhouse):
     app [--upload]     Release the project in a repository (dry run without --upload). The kind in sct_app.toml
                        decides: a Python module (default) uploads code, wheels and Python; kind = "dotnet" builds
@@ -86,6 +93,18 @@ PYTHON_REMOTE = f"{REMOTE_ROOT}/runtime/python"
 PYTHON_DESCRIPTOR_REMOTE = f"{REMOTE_ROOT}/runtime"
 MAX_WORKERS = 8
 UPLOAD_RETRIES = 3
+
+UPDATER_REPO = REPO_ROOT
+NEXTCLOUD_CLI_REPO = Path(r"D:\Python_scripts\sct-nextcloud-cli")
+REPORT_GENERATOR_REPO = Path(r"D:\Python_scripts\sct-report-generator")
+SCREEN_CHECKER_REPO = Path(r"C:\Users\Pavel\source\repos\Creosell\sct-screen-checker")
+# Names accepted instead of a repository path in the commands; see alias_key for the spelling that is accepted
+REPO_ALIASES = {
+    "updater": UPDATER_REPO,
+    "nextcloud-cli": NEXTCLOUD_CLI_REPO,
+    "report-generator": REPORT_GENERATOR_REPO,
+    "screen-checker": SCREEN_CHECKER_REPO,
+}
 
 load_dotenv(Path(__file__).parent / ".env")
 logger.remove()
@@ -505,6 +524,23 @@ def ensure_lock(spec: AppSpec, compile_fn=compile_lock) -> bool:
     return True
 
 
+def alias_key(value: str) -> str:
+    """Normalizes an alias: any case, "_" like "-", the "sct-" and "suite-" prefixes optional, so that "updater",
+    "sct-updater", "suite_updater" and "Report_Generator" all find their repository."""
+    key = value.lower().replace("_", "-")
+    for prefix in ("sct-", "suite-"):
+        key = key.removeprefix(prefix)
+    return key
+
+
+def resolve_repo(value: str) -> Path:
+    """Turns a repository alias (see REPO_ALIASES) or a path into an existing folder; used as an argparse type."""
+    path = REPO_ALIASES.get(alias_key(value), Path(value))
+    if not path.is_dir():
+        raise argparse.ArgumentTypeError(f"repository folder not found: {path} (aliases: {', '.join(REPO_ALIASES)})")
+    return path
+
+
 def cmd_upgrade(args: argparse.Namespace) -> None:
     """Moves the pinned versions of a module to the newest ones allowed by requirements.in."""
     spec = load_spec(Path(args.module))
@@ -735,11 +771,11 @@ def main() -> None:
     gc.set_defaults(func=cmd_gc)
 
     upgrade = sub.add_parser("upgrade", help="move the pinned dependency versions of a module to the newest allowed")
-    upgrade.add_argument("module", help="path of the module repository")
+    upgrade.add_argument("module", type=resolve_repo, help="repository alias (updater, nextcloud-cli, report-generator, screen-checker) or path of the module repository")
     upgrade.set_defaults(func=cmd_upgrade)
 
     app = sub.add_parser("app", help="release a repository: Python module or .NET project (dry run unless --upload)")
-    app.add_argument("module", help="path of the repository")
+    app.add_argument("module", type=resolve_repo, help="repository alias (updater, nextcloud-cli, report-generator, screen-checker) or path of the repository")
     app.add_argument("version", nargs="?", help="release version (optional for a .NET project: read from the built exe)")
     app.add_argument("--upload", action="store_true", help="publish to the server")
     app.set_defaults(func=cmd_app)
