@@ -49,7 +49,7 @@ NC_PASSWORD_QA=your_app_password
 
 ## Version
 
-Current version: **1.1.0** (set in `SCT_Updater\Properties\AssemblyInfo.cs` — `AssemblyVersion` / `AssemblyFileVersion`). See [CHANGELOG.md](CHANGELOG.md) for history.
+Current version: **1.1.1** (set in `SCT_Updater\Properties\AssemblyInfo.cs` — `AssemblyVersion` / `AssemblyFileVersion`). See [CHANGELOG.md](CHANGELOG.md) for history.
 
 ## Releasing
 
@@ -57,8 +57,18 @@ See [README.md](README.md#releasing) for full release instructions.
 
 Release command (from repo root):
 ```bash
-uv run --active .\tools\release\release_manager.py zip .\SCT_Updater\bin\Release\app.publish\ suite_updater 1.1.0 --upload
+uv run --active .\tools\release\release_manager.py zip .\SCT_Updater\bin\Release\app.publish\ suite_updater 1.1.1 --upload
 ```
+
+Do not run `Rebuild` on the Release configuration (MSBuild `-t:Rebuild`): it cleans `SCT_Updater\bin\Release\app.publish`, including files installed there for manual testing. Use a normal build.
+
+## Python modules (Nextcloud CLI, Report Generator, ...)
+
+Python modules are released with `tools/release/app_release.py` (`lock`, `app`, `python-core`). Each module repository holds `sct_app.toml`, `requirements.in` and `requirements.lock`; the tool uploads the code and only the wheels missing on the server (`runtime/wheels`). The Updater unpacks wheels into `apps/<module>` with `WheelInstaller`; the Python interpreter is the only shared piece.
+
+The full process, file layout, rules (one Python minor version, `SCT_ROOT`, no `import site`, `AsyncNextcloud`) and implementation status are in [docs/module-release.md](docs/module-release.md). **Keep that file and the instructions of every module repository in sync when the release process changes.**
+
+Tests: `dotnet test SCT_Updater.Tests/SCT_Updater.Tests.csproj` (Updater), `python -m pytest tools/release/tests` (release tool).
 
 ## Communication Style & Code Standards
 

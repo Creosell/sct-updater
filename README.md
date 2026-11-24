@@ -1,4 +1,4 @@
-# SCT Updater
+﻿# SCT Updater
 
 Windows application for managing updates of Screen Check Tool (SCT) suite components. Downloads and installs module updates from Nextcloud.
 
@@ -68,6 +68,10 @@ Replace `1.0.1` with the actual version from `AssemblyInfo.cs`.
 | `--upload` | Skip confirmation and upload immediately |
 
 The script creates `release_artifacts/` locally (gitignored) with the zip and manifest, then uploads to `SCT/Updater/versions/updater/1.0.1/`.
+
+### Python modules (Nextcloud CLI, Report Generator, ...)
+
+Python modules are released with a separate tool, `tools/release/app_release.py` (commands `lock`, `app`, `python-core`). Each module repository contains only `sct_app.toml`, `requirements.in` and `requirements.lock`; the tool uploads the code and the missing wheels. See [docs/module-release.md](docs/module-release.md) for the full process, layout, rules and status.
 
 ## Changelog
 
