@@ -1,0 +1,14 @@
+[package]
+name = "sct_launcher"
+version = "0.1.0"
+edition = "2021"
+description = "Starts a Python module of the Screen Check Suite from the shared embeddable Python"
+
+[dependencies]
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+panic = "abort"
+codegen-units = 1

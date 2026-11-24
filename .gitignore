@@ -372,3 +372,6 @@ tools/release/release.log
 release_artifacts/
 graphify-out/cache/
 graphify-out/.rebuild.lock
+
+# Python tooling
+__pycache__/
