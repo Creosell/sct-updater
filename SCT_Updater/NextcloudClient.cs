@@ -177,20 +177,12 @@ namespace SCT_Updater
         }
 
         /// <summary>
-        /// Resolves the download URL of a manifest file: the shared store (by hash) for runtime-share
-        /// manifests, the version folder (by path) otherwise.
+        /// Resolves the download URL of a manifest file in the version folder of the manifest.
         /// </summary>
         /// <param name="manifest">Manifest the file belongs to.</param>
         /// <param name="file">File entry to download.</param>
         /// <returns>Absolute WebDAV URL of the file.</returns>
-        public string BuildManifestFileUrl(FileManifest manifest, ManifestFile file)
-        {
-            if (!manifest.IsRuntimeShare) return BuildFullFileUrl(manifest.BaseUrl, file.Path);
-
-            string storeUrl = string.IsNullOrEmpty(manifest.StoreUrl) ? AppConfig.DEFAULT_STORE_URL : manifest.StoreUrl;
-            string hash = file.Hash.ToLowerInvariant();
-            return BuildFullFileUrl(storeUrl, $"{hash.Substring(0, 2)}/{hash}");
-        }
+        public string BuildManifestFileUrl(FileManifest manifest, ManifestFile file) => BuildFullFileUrl(manifest.BaseUrl, file.Path);
 
         /// <summary>
         /// Fetches the descriptor of the embeddable Python archive published for a minor version.

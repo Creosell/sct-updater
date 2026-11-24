@@ -110,6 +110,38 @@ namespace SCT_Updater
             statusProgress.Report("Installing libraries...");
             await SyncWheelsAsync(manifest, percentProgress);
             CleanupLegacyAppFolders(manifest.ProductId);
+            PruneWheelCache();
+        }
+
+        /// <summary>
+        /// Deletes the cached wheels that no installed module lists in its marker (wheels of replaced versions and
+        /// interrupted downloads), so apps/wheelhouse only holds what a reinstall can need. A failure is logged and ignored.
+        /// </summary>
+        private static void PruneWheelCache()
+        {
+            try
+            {
+                string appsDir = Path.Combine(Application.StartupPath, AppConfig.APPS_DIR);
+                string cacheDir = Path.Combine(Application.StartupPath, AppConfig.WHEELHOUSE_DIR);
+                if (!Directory.Exists(cacheDir)) return;
+
+                var referenced = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (string markerPath in Directory.GetDirectories(appsDir).Select(d => Path.Combine(d, WheelMarkerFile)).Where(File.Exists))
+                {
+                    var marker = JsonConvert.DeserializeObject<WheelMarker>(File.ReadAllText(markerPath));
+                    referenced.UnionWith(marker?.Wheels.Keys ?? Enumerable.Empty<string>());
+                }
+
+                foreach (string file in Directory.GetFiles(cacheDir).Where(f => !referenced.Contains(Path.GetFileName(f))))
+                {
+                    Log.Debug($"Removing the unused cached wheel: {Path.GetFileName(file)}");
+                    File.Delete(file);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"Could not clean the wheel cache: {ex.Message}");
+            }
         }
 
         /// <summary>

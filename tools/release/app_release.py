@@ -16,18 +16,28 @@ uploads the module code, the wheels of its lock file (only those the server lack
 (only when the server lacks it) and a manifest. Modules are independent: each has its own dependencies.
 
 Commands (the wheel cache is the folder in the SCT_WHEELHOUSE environment variable, default ~/.sct_wheelhouse):
-    app [--upload]     Prepare a module release; without --upload nothing is uploaded (dry run).
+    app [--upload]     Release the project in a repository (dry run without --upload). The kind in sct_app.toml
+                       decides: a Python module (default) uploads code, wheels and Python; kind = "dotnet" builds
+                       the project with MSBuild (publish, Release) and releases it as a zip package, the version is
+                       read from the built exe.
     upgrade            Move the pinned dependency versions to the newest ones requirements.in allows.
-    updater [--upload] Build the Updater (dotnet publish, single-file exe), zip it and release it; the version is
-                       read from the built Updater.exe.
     zip [--upload]     Release any build folder as a zip package: zip <folder> <product_id> <version>.
+    gc [--delete]      List (and with --delete remove) the wheels and Python archives on the server that no version in
+                       suite_manifest.json (products and dev) uses; re-releasing an old version uploads its wheels again.
 
 requirements.lock is maintained automatically: ``app`` rewrites it (keeping the pinned versions)
 whenever requirements.in changed since the lock was made. Commit the lock when the tool says it was updated.
 
+sct_app.toml of a .NET project (kind = "dotnet"):
+    kind = "dotnet"
+    id = "screen_checker"
+    project = "WPF LCD Test/Screen Checker.csproj"
+    exe = "Screen Checker.exe"          # the built exe; its file version is the release version
+    publish_profile = "FolderProfile"   # optional: publish profile of the project (single-file settings)
+
 sct_app.toml (in the module repository):
     id = "report_generator"
-    launcher = "ReportGenerator.exe"   # optional: Rust launcher built with cargo, installed at the Updater root
+    launcher = "Report Generator.exe"  # optional: Rust launcher built with cargo, installed at the Updater root
     title = "Report Generator"         # optional: shown as the file description of the launcher (default: id)
     icon = "assets/app.ico"            # optional: icon of the launcher, a .ico file in the module repository
     [[files]]                          # source (file or folder) -> destination under apps/<id>/
@@ -66,9 +76,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNTIME_DIR = REPO_ROOT / "runtime"
 PYTHON_EMBED_FILE = RUNTIME_DIR / "python_embed.json"
 PACKAGE_MODE = "app"
-UPDATER_ID = "suite_updater"
-UPDATER_BUILD_DIR = REPO_ROOT / "release_artifacts" / "build" / UPDATER_ID
-UPDATER_PROJECT = REPO_ROOT / "SCT_Updater" / "SCT_Updater.csproj"
+BUILD_DIR = REPO_ROOT / "release_artifacts" / "build"
 LAUNCHER_DIR = REPO_ROOT / "launcher"
 REMOTE_ROOT = "SCT/Updater"
 WHEELS_REMOTE = f"{REMOTE_ROOT}/runtime/wheels"
@@ -104,6 +112,36 @@ class AppSpec:
     icon: Path | None = None
 
 
+@dataclass
+class DotnetSpec:
+    """Release descriptor of a .NET project, read from sct_app.toml (kind = "dotnet")."""
+    root: Path
+    id: str
+    project: Path
+    exe: str
+    publish_profile: str | None = None
+
+
+def read_descriptor(repo_dir: Path) -> dict:
+    """Reads the sct_app.toml of a repository."""
+    path = repo_dir / "sct_app.toml"
+    if not path.exists():
+        raise FileNotFoundError(f"{path} not found; add the descriptor to the repository.")
+    return tomllib.loads(path.read_text(encoding="utf-8"))
+
+
+def load_dotnet_spec(repo_dir: Path) -> DotnetSpec:
+    """Validates the sct_app.toml of a .NET project repository."""
+    data = read_descriptor(repo_dir)
+    for key in ("id", "project", "exe"):
+        if key not in data:
+            raise ValueError(f"sct_app.toml: '{key}' is required for kind = \"dotnet\"")
+    project = repo_dir / data["project"]
+    if not project.is_file():
+        raise FileNotFoundError(f"sct_app.toml: project not found: {project}")
+    return DotnetSpec(repo_dir, data["id"], project, data["exe"], data.get("publish_profile"))
+
+
 def sha256_of(path: Path) -> str:
     """Returns the SHA256 of a file as lowercase hex."""
     digest = hashlib.sha256()
@@ -115,10 +153,8 @@ def sha256_of(path: Path) -> str:
 
 def load_spec(module_dir: Path) -> AppSpec:
     """Reads and validates the sct_app.toml of a module repository."""
+    data = read_descriptor(module_dir)
     path = module_dir / "sct_app.toml"
-    if not path.exists():
-        raise FileNotFoundError(f"{path} not found; add the descriptor to the module repository.")
-    data = tomllib.loads(path.read_text(encoding="utf-8"))
     for key in ("id", "files"):
         if key not in data:
             raise ValueError(f"{path.name}: '{key}' is required")
@@ -459,7 +495,11 @@ def cmd_upgrade(args: argparse.Namespace) -> None:
 
 
 def cmd_app(args: argparse.Namespace) -> None:
-    """Prepares a module release; uploads it only with --upload (otherwise a dry run)."""
+    """Prepares a release of the repository; uploads it only with --upload (otherwise a dry run)."""
+    if read_descriptor(Path(args.module)).get("kind") == "dotnet":
+        return cmd_dotnet(args)
+    if not args.version:
+        sys.exit("The version is required for a Python module.")
     spec = load_spec(Path(args.module))
     ensure_lock(spec)
 
@@ -486,21 +526,89 @@ def cmd_app(args: argparse.Namespace) -> None:
     asyncio.run(run())
 
 
-def publish_updater(run=subprocess.run) -> Path:
-    """Publishes the Updater into a clean folder as one framework-dependent single-file exe and returns the folder.
+def find_msbuild() -> Path:
+    """Returns the MSBuild to use: the MSBUILD environment variable, then PATH, then the newest Visual Studio or
+    Build Tools found with vswhere; exits when there is none."""
+    configured = os.environ.get("MSBUILD") or shutil.which("msbuild")
+    if configured:
+        return Path(configured)
+    vswhere = Path(os.environ.get("ProgramFiles(x86)", "")) / "Microsoft Visual Studio" / "Installer" / "vswhere.exe"
+    if vswhere.is_file():
+        found = subprocess.run([str(vswhere), "-latest", "-products", "*", "-requires", "Microsoft.Component.MSBuild",
+                                "-find", r"MSBuild\**\Bin\MSBuild.exe"], capture_output=True, text=True).stdout.strip()
+        if found:
+            return Path(found.splitlines()[0])
+    sys.exit("MSBuild not found: put it on PATH, set MSBUILD, or install Visual Studio Build Tools "
+             "(workload '.NET desktop build tools').")
 
-    The folder is recreated on every run, so nothing but the fresh build can end up in the package.
+
+def publish_dotnet(spec: DotnetSpec, run=subprocess.run) -> Path:
+    """Publishes a .NET project (Release) with MSBuild into a clean folder and returns the folder.
+
+    MSBuild is used for every project (one build path; COM references are not supported by ``dotnet``) and only
+    its errors are shown, so the warnings of the project do not bury the release log. The folder is recreated on every run, so nothing but the fresh build can end up in the package. The result must be a
+    single-file build: loose dlls stop the release.
     """
-    dotnet = shutil.which("dotnet")
-    if not dotnet:
-        sys.exit("dotnet is required to build the Updater (install the .NET 8 SDK).")
-    shutil.rmtree(UPDATER_BUILD_DIR, ignore_errors=True)
-    run([dotnet, "publish", str(UPDATER_PROJECT), "-c", "Release", "-o", str(UPDATER_BUILD_DIR), "--nologo", "-v:q"],
-        check=True)
-    loose = sorted(item.name for item in UPDATER_BUILD_DIR.rglob("*.dll"))
+    out = BUILD_DIR / spec.id
+    shutil.rmtree(out, ignore_errors=True)
+    command = [str(find_msbuild()), str(spec.project), "-restore", "-t:Publish", "-p:Configuration=Release",
+               f"-p:PublishDir={out}{os.sep}", "-clp:ErrorsOnly", "-nologo"]
+    if spec.publish_profile:
+        command.append(f"-p:PublishProfile={spec.publish_profile}")
+    run(command, check=True)
+    loose = sorted(item.name for item in out.rglob("*.dll"))
     if loose:
-        sys.exit(f"The Updater must be a single exe, found: {', '.join(loose)}")
-    return UPDATER_BUILD_DIR
+        sys.exit(f"The build must be a single exe, found: {', '.join(loose)}")
+    return out
+
+
+async def read_remote_json(nc, remote: str) -> dict:
+    """Downloads a JSON file from the server."""
+    return json.loads((await nc.files.download(remote)).decode("utf-8"))
+
+
+async def referenced_runtime_files(nc) -> tuple[set[str], set[str]]:
+    """Returns the wheel names and the Python archive names used by the versions the clients can install.
+
+    Those are the "app" versions listed in the products and dev lists of suite_manifest.json and the archives named
+    by the runtime/python_<minor>.json descriptors. Exits when a listed manifest cannot be read, so nothing is
+    judged unused on incomplete information.
+    """
+    suite = await read_remote_json(nc, f"{REMOTE_ROOT}/suite_manifest.json")
+    listed = sorted({(p["id"], p["latest_version"]) for key in ("products", "dev") for p in suite.get(key, [])})
+    wheels: set[str] = set()
+    for product_id, version in listed:
+        try:
+            manifest = await read_remote_json(nc, f"{REMOTE_ROOT}/versions/{product_id}/{product_id}_{version}.json")
+        except NextcloudException as e:
+            sys.exit(f"Cannot read the manifest of {product_id} {version} ({e}); nothing is judged unused.")
+        if manifest.get("package_mode") == PACKAGE_MODE:
+            wheels.update(wheel["file"] for wheel in manifest.get("wheels", []))
+    archives = {(await read_remote_json(nc, f"{PYTHON_DESCRIPTOR_REMOTE}/{name}"))["file"]
+                for name in await list_remote(nc, PYTHON_DESCRIPTOR_REMOTE)
+                if name.startswith("python_") and name.endswith(".json")}
+    return wheels, archives
+
+
+def cmd_gc(args: argparse.Namespace) -> None:
+    """Lists the unused wheels and Python archives on the server; removes them only with --delete."""
+
+    async def run() -> None:
+        nc = await get_nc_client()
+        wheels, archives = await referenced_runtime_files(nc)
+        if not wheels:
+            sys.exit("No app version is listed in suite_manifest.json; refusing to judge any wheel unused.")
+        unused = {WHEELS_REMOTE: sorted(set(await list_remote(nc, WHEELS_REMOTE)) - wheels),
+                  PYTHON_REMOTE: sorted(set(await list_remote(nc, PYTHON_REMOTE)) - archives)}
+        for folder, names in unused.items():
+            for name in names:
+                logger.info(f"Unused: {folder}/{name}")
+                if args.delete:
+                    await nc.files.delete(f"{folder}/{name}")
+        total = sum(map(len, unused.values()))
+        logger.success(f"{total} unused file(s) {'deleted' if args.delete else 'found; add --delete to remove them'}.")
+
+    asyncio.run(run())
 
 
 def read_exe_version(exe: Path) -> str:
@@ -578,19 +686,19 @@ def cmd_zip(args: argparse.Namespace) -> None:
     release_folder(folder, args.product_id, args.version, args.upload)
 
 
-def cmd_updater(args: argparse.Namespace) -> None:
-    """Builds the Updater and releases it as a zip package; the version is read from the built Updater.exe."""
-    folder = publish_updater()
-    release_folder(folder, UPDATER_ID, read_exe_version(folder / "Updater.exe"), args.upload)
+def cmd_dotnet(args: argparse.Namespace) -> None:
+    """Builds a .NET project and releases it as a zip package; the version is read from the built exe."""
+    spec = load_dotnet_spec(Path(args.module))
+    folder = publish_dotnet(spec)
+    version = read_exe_version(folder / spec.exe)
+    if args.version and args.version != version:
+        sys.exit(f"The built {spec.exe} has version {version}, not {args.version}: change the version in the project.")
+    release_folder(folder, spec.id, version, args.upload)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Screen Check Suite release tool")
     sub = parser.add_subparsers(dest="command", required=True)
-
-    updater = sub.add_parser("updater", help="build and release the Updater itself (dry run unless --upload)")
-    updater.add_argument("--upload", action="store_true", help="publish to the server")
-    updater.set_defaults(func=cmd_updater)
 
     zipper = sub.add_parser("zip", help="release any build folder as a zip package (dry run unless --upload)")
     zipper.add_argument("folder", help="folder with the published build")
@@ -599,13 +707,17 @@ def main() -> None:
     zipper.add_argument("--upload", action="store_true", help="publish to the server")
     zipper.set_defaults(func=cmd_zip)
 
+    gc = sub.add_parser("gc", help="list (or delete with --delete) wheels and Python archives no listed version uses")
+    gc.add_argument("--delete", action="store_true", help="delete the unused files from the server")
+    gc.set_defaults(func=cmd_gc)
+
     upgrade = sub.add_parser("upgrade", help="move the pinned dependency versions of a module to the newest allowed")
     upgrade.add_argument("module", help="path of the module repository")
     upgrade.set_defaults(func=cmd_upgrade)
 
-    app = sub.add_parser("app", help="release a module version (dry run unless --upload)")
-    app.add_argument("module", help="path of the module repository")
-    app.add_argument("version")
+    app = sub.add_parser("app", help="release a repository: Python module or .NET project (dry run unless --upload)")
+    app.add_argument("module", help="path of the repository")
+    app.add_argument("version", nargs="?", help="release version (optional for a .NET project: read from the built exe)")
     app.add_argument("--upload", action="store_true", help="publish to the server")
     app.set_defaults(func=cmd_app)
 

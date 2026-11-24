@@ -8,10 +8,10 @@ WinForms desktop application (.NET 8, `net8.0-windows`) for managing updates of 
 
 ## Build & Run
 
-**Build:** only the .NET 8 SDK is needed (no Visual Studio, MSBuild or NuGet CLI): `dotnet build SCT_Updater/SCT_Updater.csproj -c Release`.
-Release package: `dotnet publish SCT_Updater/SCT_Updater.csproj -c Release -o <folder>` (done by `app_release.py updater`) gives one framework-dependent single-file `Updater.exe` (about 2 MB; the .NET 8 Desktop Runtime must be installed, as for Screen Checker).
+**Build:** `dotnet build SCT_Updater/SCT_Updater.csproj -c Release` (the .NET 8 SDK is enough for development and tests).
+Release package: built by `app_release.py app .` with **MSBuild** (publish, Release; Visual Studio or Build Tools, found through `MSBUILD`, `PATH` or vswhere): one framework-dependent single-file `Updater.exe` (about 2 MB; the .NET 8 Desktop Runtime must be installed, as for Screen Checker).
 
-> **Requirement: the Updater is a single `Updater.exe`.** It is produced by `PublishSingleFile` (the project is SDK-style, so Costura.Fody is no longer used), and `app_release.py updater` refuses to package a build with loose dlls. Any change of the build must keep this.
+> **Requirement: the Updater is a single `Updater.exe`.** It is produced by `PublishSingleFile` (the project is SDK-style, so Costura.Fody is no longer used), and `app_release.py app .` refuses to package a build with loose dlls. Any change of the build must keep this.
 
 ## Architecture
 
@@ -54,16 +54,16 @@ Current version: **1.2.0** (set in `SCT_Updater\SCT_Updater.csproj` — `Assembl
 
 See [README.md](README.md#releasing) for full release instructions.
 
-Release command (from repo root; the tool publishes the Updater with `dotnet publish` into a clean folder, reads the version from Updater.exe, and without `--upload` it is a dry run):
+Release command (from repo root; `sct_app.toml` in the root describes the project, the tool builds it with MSBuild into a clean folder, reads the version from Updater.exe, and without `--upload` it is a dry run):
 ```bash
-uv run tools/release/app_release.py updater --upload
+uv run tools/release/app_release.py app . --upload
 ```
 
 Any other build folder (for example Screen Checker) is released with `uv run tools/release/app_release.py zip <folder> <product_id> <version> --upload`.
 
 ## Python modules (Nextcloud CLI, Report Generator, ...)
 
-The Updater and the Python modules are released with `tools/release/app_release.py` (`updater`, `zip`, `app`, `upgrade`). Each module repository holds `sct_app.toml`, `requirements.in` and `requirements.lock`; the tool uploads the code and only the wheels missing on the server (`runtime/wheels`). The Updater unpacks wheels into `apps/<module>` with `WheelInstaller`; the Python interpreter is the only shared piece.
+The Updater, the other .NET projects and the Python modules are released with `tools/release/app_release.py` (`app`, `zip`, `upgrade`, `gc`); `app` looks at `sct_app.toml` of the repository: `kind = "dotnet"` builds a .NET project, otherwise it is a Python module. Each module repository holds `sct_app.toml`, `requirements.in` and `requirements.lock`; the tool uploads the code and only the wheels missing on the server (`runtime/wheels`). The Updater unpacks wheels into `apps/<module>` with `WheelInstaller`; the Python interpreter is the only shared piece.
 
 The full process, file layout, rules (one Python minor version, `SCT_ROOT`, no `import site`, `AsyncNextcloud`) and implementation status are in [docs/module-release.md](docs/module-release.md). **Keep that file and the instructions of every module repository in sync when the release process changes.**
 

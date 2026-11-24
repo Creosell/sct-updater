@@ -8,14 +8,13 @@ release process changes, update this file and the module instructions together.*
 
 | Part | State |
 |------|-------|
-| Release tool `tools/release/app_release.py` (`app`, `upgrade`, `updater`, `zip`; the lock file is maintained automatically) | Implemented, 41 tests, dry-run verified on both modules |
+| Release tool `tools/release/app_release.py` (`app`, `upgrade`, `zip`, `gc`; the lock file is maintained automatically) | Implemented, 63 tests, verified by real releases of both modules |
 | Wheel installer `WheelInstaller` (Updater) | Implemented, tested against real wheels |
-| Updater support for `package_mode: app` (Python core, code delta, wheels, reinstall, migration from zip) | Implemented, 63 Updater tests; verified on the dev channel (2026-11-24): self-update 1.1.1 -> 1.2.0, installation of all modules through the Updater |
+| Updater support for `package_mode: app` (Python core, code delta, wheels, reinstall, migration from zip) | Implemented, 49 Updater tests; verified on the dev channel (2026-11-24): self-update 1.1.1 -> 1.2.0, installation of all modules through the Updater |
 | Rust launcher (`launcher/`), built per module by `app_release.py` | Implemented, 4 unit tests, end-to-end checked with the real embeddable Python |
 | Modules prepared for this scheme: Nextcloud CLI and Report Generator (`sct_app.toml`, `requirements.in/.lock`) | Installed through the Updater on the dev channel (CLI 1.3.0, Report Generator 1.6.0): reports are generated and uploaded |
-| Legacy PyInstaller/zip release path (`release_manager.py`, specs) | Stage 6 succeeded; to be removed from the module repositories (stage 7) |
-
-Until the Updater side exists, modules keep being released as `zip` with their own `release_manager.py` (see the module README).
+| Legacy PyInstaller/zip release path (`release_manager.py`, specs, PyInstaller dependencies) | Removed from the Updater and module repositories (stage 7) |
+| Cleanup of cached wheels (`apps/wheelhouse`) after an install, `gc` of unused wheels and Python archives on the server | Implemented, tested |
 
 ## Idea in one paragraph
 
@@ -70,6 +69,9 @@ uv run tools/release/app_release.py app D:\Python_scripts\Nextcloud_CLI 1.3.0 --
 
 # Move the pinned dependency versions to the newest ones requirements.in allows
 uv run tools/release/app_release.py upgrade D:\Python_scripts\Nextcloud_CLI
+
+# List the wheels and Python archives on the server that no listed version uses; --delete removes them
+uv run tools/release/app_release.py gc
 ```
 
 * The wheel and Python cache is the folder in the `SCT_WHEELHOUSE` environment variable (default `~/.sct_wheelhouse`).
@@ -93,7 +95,7 @@ uploaded; clients download only the changed files.
 `app --upload` for every module (wheels are built per Python minor version; the next `app --upload` publishes the new
 Python). Patch upgrades (3.13.x) only need the new version and SHA256 in `runtime/python_embed.json`.
 
-**Release the Updater itself:** `uv run tools/release/app_release.py updater --upload` (publishes it with `dotnet publish`, zips it and reads the version from the built `Updater.exe`; see README). Any other build folder: `zip <folder> <product_id> <version> --upload`.
+**Release the Updater itself:** `uv run tools/release/app_release.py app . --upload` from the Updater repository (its `sct_app.toml` has `kind = "dotnet"`): builds it with MSBuild, zips it and reads the version from the built `Updater.exe`; see README. Any other .NET project (Screen Checker) is released the same way from its own repository; a ready folder with `zip <folder> <product_id> <version> --upload`.
 Roll the new Updater out through `products` **before** releasing modules in the `app` mode: older Updaters do not
 understand that manifest.
 
@@ -109,17 +111,18 @@ understand that manifest.
 * The Nextcloud server keeps stale locks on directories after an interrupted upload (`423 Locked` on delete). The wheel
   store is a flat folder (`runtime/wheels`) to keep this harmless; if a folder stays locked, an administrator must clear
   `oc_file_locks` (or the Redis lock keys).
+* The launcher name is a contract with the programs that start the module: Screen Checker runs `Report Generator.exe` and `Nextcloud CLI.exe` by these names (spaces are allowed, like `Screen Checker.exe`). Renaming a launcher must be released together with the caller, and a module still delivered as a `zip` keeps its old name until it moves to the `app` package.
 * Do not release a version that already exists in `products`: it would change what production clients installed.
 
 ## Testing
 
 ```bash
-dotnet test SCT_Updater.Tests/SCT_Updater.Tests.csproj     # Updater (63 tests)
-python -m pytest tools/release/tests                       # release tool (26 tests)
+dotnet test SCT_Updater.Tests/SCT_Updater.Tests.csproj     # Updater (49 tests)
+python -m pytest tools/release/tests                       # release tool (63 tests)
 cd launcher && SCT_APP=demo cargo test                    # launcher (4 tests)
 ```
 
-The Updater project needs only the .NET 8 SDK (`dotnet build`, `dotnet publish`); `app_release.py updater` publishes into a clean folder, so there is no state of a test installation to protect.
+The Updater project builds with `dotnet build` (the .NET 8 SDK) for development and tests; the release build uses MSBuild (one path for every .NET project, see README), always into a clean folder, so there is no state of a test installation to protect.
 
 ## What the Updater does with an `app` package
 
@@ -132,7 +135,9 @@ Installing or updating a module (`UpdateService.RunAppUpdateAsync`):
 
 Reinstall deletes `apps/<module>` and the module's files outside `apps`, never `apps/python_runtime`, other modules or the rest of `config/`; wheels are then unpacked again from the local cache without downloading.
 
-Known limits: the wheel cache in `apps/wheelhouse` is not pruned yet; the migration of the module repositories (stage 5) is not done, so no module is released and started in this mode yet.
+**Wheel cache.** After every install the Updater deletes the wheels in `apps/wheelhouse` that no installed module lists in its `.sct_wheels.json` (replaced versions, interrupted downloads), so the cache holds only what a reinstall can need. A failure to clean is logged and ignored.
+
+**Server cleanup (`gc`).** Wheels and Python archives pile up on the server. `app_release.py gc` keeps what the versions listed in `products` and `dev` of `suite_manifest.json` use (and the Python archives named by `runtime/python_<minor>.json`) and reports the rest; `--delete` removes it. It stops without deleting when a listed manifest cannot be read or no app version is listed. Re-releasing an old version uploads its missing wheels again, so nothing is lost for good.
 
 ## The launcher
 
@@ -140,7 +145,7 @@ Known limits: the wheel cache in `apps/wheelhouse` is not pruned yet; the migrat
 
 What the launcher does when started: runs `apps/python_runtime/python.exe -X utf8 apps/<module> <arguments>`, passes the arguments unchanged (spaces and non-ASCII characters included), keeps the working directory of the caller, sets `SCT_ROOT` to the Updater folder, forwards stdout/stderr and returns the exit code of the module. It survives Ctrl+C, so the module (which gets it too) can finish and its exit code is still returned. If the runtime or the module is missing it prints how to repair it (run the Updater) and exits with 1.
 
-**Name, icon and file properties.** `app_release.py` passes the exe name, `title` and `icon` to `launcher/build.rs`, which embeds them with the `winresource` crate (needs the Windows SDK resource compiler, found automatically). The result is built under its final name, for example `release_artifacts/launcher/nextcloud_cli/release/Nextcloud_CLI.exe`, and shows in Explorer with the module icon and, under Details: description = `title`, product = "Screen Check Suite", original file name = the launcher name. The file and product version is the module release version passed to `app` (`1.3.0`), so Explorer shows what is installed; the version of the launcher itself (`launcher/Cargo.toml`) is kept in the Comments field (`Launcher 1.0.0`).
+**Name, icon and file properties.** `app_release.py` passes the exe name, `title` and `icon` to `launcher/build.rs`, which embeds them with the `winresource` crate (needs the Windows SDK resource compiler, found automatically). The result is built under its final name, for example `release_artifacts/launcher/nextcloud_cli/release/Nextcloud CLI.exe`, and shows in Explorer with the module icon and, under Details: description = `title`, product = "Screen Check Suite", original file name = the launcher name. The file and product version is the module release version passed to `app` (`1.3.0`), so Explorer shows what is installed; the version of the launcher itself (`launcher/Cargo.toml`) is kept in the Comments field (`Launcher 1.0.0`).
 
 The build is reproducible (`/Brepro` in `launcher/.cargo/config.toml`, also from a different folder): the same module version always gives the same exe hash. The launcher is rebuilt and downloaded with every release (about 200 KB). Do not remove that file, and build the launcher only through `app_release.py` (cargo reads `.cargo/config.toml` from the working directory).
 

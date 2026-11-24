@@ -56,8 +56,6 @@ namespace SCT_Updater
         public string Version { get; set; }
         [JsonProperty("manifest_hash", NullValueHandling = NullValueHandling.Ignore)]
         public string ManifestHash { get; set; } // SHA256 of the file manifest that was installed
-        [JsonProperty("files", NullValueHandling = NullValueHandling.Ignore)]
-        public Dictionary<string, string> Files { get; set; } // Relative path to SHA256 of an installed runtime-share product; null otherwise
     }
 
     public class FileManifest
@@ -69,15 +67,9 @@ namespace SCT_Updater
         [JsonProperty("base_url")]
         public string BaseUrl { get; set; }
         [JsonProperty("package_mode")]
-        public string PackageMode { get; set; } // "zip", "files" or "runtime-share"
-        [JsonProperty("store_url", NullValueHandling = NullValueHandling.Ignore)]
-        public string StoreUrl { get; set; } // Shared blob store, runtime-share only
+        public string PackageMode { get; set; } // "zip", "files" or "app"
         [JsonProperty("files")]
         public List<ManifestFile> Files { get; set; }
-
-        /// <summary>True when every file is fetched from the shared blob store by its hash.</summary>
-        [JsonIgnore]
-        public bool IsRuntimeShare => PackageMode == AppConfig.PACKAGE_MODE_RUNTIME_SHARE;
 
         [JsonProperty("python", NullValueHandling = NullValueHandling.Ignore)]
         public string Python { get; set; } // Python minor version of an "app" package, e.g. "3.13"

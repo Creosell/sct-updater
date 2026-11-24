@@ -348,15 +348,6 @@ namespace SCT_Updater
             // --- CHANGED: Use new GetFileManifestAsync signature ---
             FileManifest oldManifest = await _nextcloudClient.GetFileManifestAsync(product.Id, installedProduct.Version);
 
-            if (newManifest.IsRuntimeShare && !oldManifest.IsRuntimeShare)
-            {
-                Log.Info($"Migrating {product.Id} to the runtime-share layout: clean install.");
-                statusProgress.Report("Removing the previous package layout...");
-                await DeleteModuleFilesFromManifestAsync(newManifest);
-                await StartModuleUpdate_Files(newManifest, new Dictionary<string, string>(), statusProgress, percentProgress);
-                return;
-            }
-
             statusProgress.Report("Comparing versions...");
             var oldFiles = oldManifest.Files.ToDictionary(f => f.Path, f => f.Hash);
             var newFiles = newManifest.Files.ToDictionary(f => f.Path, f => f.Hash);
@@ -515,103 +506,21 @@ namespace SCT_Updater
         }
 
         /// <summary>
-        /// Downloads one manifest file to <paramref name="localPath"/>. Files of a runtime-share manifest are
-        /// verified against their SHA256 before being written, so a corrupt blob never reaches the disk.
+        /// Downloads one manifest file to <paramref name="localPath"/>.
         /// </summary>
         /// <param name="manifest">Manifest the file belongs to.</param>
         /// <param name="file">File entry to download.</param>
         /// <param name="localPath">Destination path on disk.</param>
-        /// <param name="localIndex">
-        /// Hash to relative path of the files installed for other products; a matching, verified file is copied
-        /// instead of being downloaded. Used by runtime-share manifests only.
-        /// </param>
-        /// <exception cref="InvalidDataException">The downloaded content does not match the manifest hash.</exception>
         /// <exception cref="OperationCanceledException">The user cancelled while the destination file was in use.</exception>
-        private async Task DownloadManifestFileAsync(FileManifest manifest, ManifestFile file, string localPath,
-            IReadOnlyDictionary<string, string> localIndex = null)
+        private async Task DownloadManifestFileAsync(FileManifest manifest, ManifestFile file, string localPath)
         {
-            if (manifest.IsRuntimeShare)
-            {
-                string source = await FindLocalCopyAsync(file, localIndex);
-                if (source != null)
-                {
-                    await RunWithFileInUseHandlingAsync(() =>
-                    {
-                        File.Copy(source, localPath, true);
-                        return Task.CompletedTask;
-                    }, manifest.ProductId);
-                    return;
-                }
-            }
-
-            string url = _nextcloudClient.BuildManifestFileUrl(manifest, file);
-            byte[] data = await _nextcloudClient.DownloadFileBytesAsync(url);
-
-            if (manifest.IsRuntimeShare && !Utility.GetBytesHash(data).Equals(file.Hash, StringComparison.OrdinalIgnoreCase))
-            {
-                throw new InvalidDataException($"Hash mismatch for '{file.Path}' downloaded from {url}.");
-            }
+            byte[] data = await _nextcloudClient.DownloadFileBytesAsync(_nextcloudClient.BuildManifestFileUrl(manifest, file));
 
             await RunWithFileInUseHandlingAsync(() =>
             {
                 File.WriteAllBytes(localPath, data);
                 return Task.CompletedTask;
             }, manifest.ProductId);
-        }
-
-        /// <summary>
-        /// Looks for an already installed file with the content of a manifest file, so it can be copied instead of downloaded.
-        /// </summary>
-        /// <param name="file">Manifest file to find.</param>
-        /// <param name="localIndex">Hash to relative path of the files installed for other products.</param>
-        /// <returns>Full path of a verified local copy, or null when there is none.</returns>
-        private static async Task<string> FindLocalCopyAsync(ManifestFile file, IReadOnlyDictionary<string, string> localIndex)
-        {
-            if (localIndex == null || !localIndex.TryGetValue(file.Hash.ToLowerInvariant(), out string relativePath)) return null;
-
-            string candidate = Path.Combine(Application.StartupPath, relativePath);
-            try
-            {
-                if (File.Exists(candidate) && (await Utility.GetFileHashAsync(candidate)).Equals(file.Hash, StringComparison.OrdinalIgnoreCase))
-                {
-                    return candidate;
-                }
-            }
-            catch (IOException ex)
-            {
-                Log.Warn($"Local copy {relativePath} is not readable: {ex.Message}");
-            }
-            return null;
-        }
-
-        /// <summary>
-        /// Selects the files of a runtime-share manifest whose local copy is missing or has a different SHA256.
-        /// </summary>
-        /// <param name="manifest">Manifest to check against the files on disk.</param>
-        /// <returns>The files that must be fetched.</returns>
-        private static async Task<List<ManifestFile>> FindFilesToDownloadByHashAsync(FileManifest manifest)
-        {
-            var gate = new SemaphoreSlim(8);
-            var checks = manifest.Files.Select(async file =>
-            {
-                await gate.WaitAsync();
-                try
-                {
-                    string localPath = Path.Combine(Application.StartupPath, file.Path);
-                    bool upToDate = File.Exists(localPath)
-                        && (await Utility.GetFileHashAsync(localPath)).Equals(file.Hash, StringComparison.OrdinalIgnoreCase);
-                    return upToDate ? null : file;
-                }
-                catch (IOException)
-                {
-                    return file;
-                }
-                finally
-                {
-                    gate.Release();
-                }
-            });
-            return (await Task.WhenAll(checks)).Where(f => f != null).ToList();
         }
 
         /// <summary>
@@ -680,29 +589,18 @@ namespace SCT_Updater
             var filesToDownload = new List<ManifestFile>();
 
             // --- DELTA LOGIC ---
-            IReadOnlyDictionary<string, string> localIndex = null;
-            if (newManifest.IsRuntimeShare)
+            foreach (var newFile in newManifest.Files)
             {
-                // Runtime-share: trust the disk, not the old manifest; every file is compared by SHA256
-                filesToDownload = await FindFilesToDownloadByHashAsync(newManifest);
-                filesDone = newManifest.Files.Count - filesToDownload.Count;
-                localIndex = _localState.GetLocalFileIndex(newManifest.ProductId);
-            }
-            else
-            {
-                foreach (var newFile in newManifest.Files)
+                if (oldFiles.TryGetValue(newFile.Path, out string oldHash) && oldHash == newFile.Hash)
                 {
-                    if (oldFiles.TryGetValue(newFile.Path, out string oldHash) && oldHash == newFile.Hash)
+                    string localPath = Path.Combine(Application.StartupPath, newFile.Path);
+                    if (File.Exists(localPath))
                     {
-                        string localPath = Path.Combine(Application.StartupPath, newFile.Path);
-                        if (File.Exists(localPath))
-                        {
-                            filesDone++;
-                            continue;
-                        }
+                        filesDone++;
+                        continue;
                     }
-                    filesToDownload.Add(newFile);
                 }
+                filesToDownload.Add(newFile);
             }
             Log.Debug($"Found {filesToDownload.Count} files to download. {filesDone} files are already up-to-date.");
 
@@ -723,7 +621,7 @@ namespace SCT_Updater
                     await semaphore.WaitAsync();
                     try
                     {
-                        await DownloadManifestFileAsync(newManifest, file, localPath, localIndex);
+                        await DownloadManifestFileAsync(newManifest, file, localPath);
 
                         int done = Interlocked.Increment(ref filesDone);
                         percentProgress.Report((int)((double)done / newManifest.Files.Count * 100));
@@ -838,86 +736,6 @@ namespace SCT_Updater
             await Task.WhenAll(allDownloadTasks);
 
             statusProgress.Report("Download complete.");
-        }
-
-        /// <summary>
-        /// NEW: Downloads the entire /drivers folder and executes the install.bat script.
-        /// </summary>
-        public async Task InstallDriversAsync(IProgress<string> statusProgress, IProgress<int> percentProgress)
-        {
-            Log.Info("Starting driver & framework downloading...");
-            string localPath = Path.Combine(Application.StartupPath, AppConfig.LOCAL_DRIVERS_PATH);
-            string serverUrl = AppConfig.NC_DRIVERS_URL;
-
-            // 1. Clear old drivers directory
-            statusProgress.Report("Clearing old driver files...");
-            percentProgress.Report(0);
-            try
-            {
-                Utility.DeletePath(localPath);
-            }
-            catch (Exception ex)
-            {
-                Log.Error(ex, "Failed to delete old drivers directory. Aborting.");
-                throw new Exception($"Failed to clear old 'drivers' directory. Close any open files and try again. Error: {ex.Message}", ex);
-            }
-
-            // 2. Get server file list (recursively)
-            statusProgress.Report("Fetching server file list...");
-            var serverFiles = await _nextcloudClient.ListAllFilesRecursiveAsync(serverUrl);
-            if (!serverFiles.Any())
-            {
-                throw new Exception("No files found in the 'drivers' directory on the server.");
-            }
-
-            // 3. Ensure local directory exists
-            Directory.CreateDirectory(localPath);
-
-            // 4. Download all files (overwriting)
-            Log.Debug($"Downloading {serverFiles.Count} driver files...");
-            int filesDone = 0;
-            var semaphore = new SemaphoreSlim(AppConfig.MAX_PARALLEL_DOWNLOADS);
-            var allTasks = new List<Task>();
-
-            foreach (var relativePath in serverFiles)
-            {
-                var downloadTask = Task.Run(async () =>
-                {
-                    await semaphore.WaitAsync();
-                    try
-                    {
-                        // Note: relativePath might be "subdir/file.exe", Path.Combine handles this.
-                        string fileUrl = $"{serverUrl}/{relativePath}";
-                        string localFilePath = Path.Combine(localPath, relativePath);
-
-                        // Ensure sub-directory exists
-                        Directory.CreateDirectory(Path.GetDirectoryName(localFilePath));
-
-                        byte[] data = await _nextcloudClient.DownloadFileBytesAsync(fileUrl);
-                        File.WriteAllBytes(localFilePath, data);
-
-                        int done = Interlocked.Increment(ref filesDone);
-                        percentProgress.Report((int)((double)done / serverFiles.Count * 100));
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.Error(ex, $"Failed to download driver file {relativePath}");
-                        // Continue with other files
-                    }
-                    finally
-                    {
-                        semaphore.Release();
-                    }
-                });
-                allTasks.Add(downloadTask);
-            }
-
-            statusProgress.Report($"Downloading {serverFiles.Count} driver files...");
-            await Task.WhenAll(allTasks);
-
-            percentProgress.Report(100);
-            Log.Info("Driver download complete.");
-            statusProgress.Report("Drivers are downloaded. Please run install.bat in 'drivers' folder");
         }
     }
 }

@@ -170,6 +170,40 @@ namespace SCT_Updater.Tests
         }
 
         [Fact]
+        public async Task WheelChange_RemovesTheUnusedWheelFromTheCache()
+        {
+            var (server, service, state) = Arrange();
+            var one = Wheel("pkgone", ("pkgone/__init__.py", "one"));
+            var two = Wheel("pkgtwo", ("pkgtwo/__init__.py", "two"));
+            Publish(server, Id, "1.0.0", Code, new[] { one, two });
+            await Install(service, Id, "1.0.0");
+            state.SaveLocalVersion(Id, "1.0.0");
+            File.WriteAllText(Path_("apps/wheelhouse/broken.whl.part"), "half");
+
+            Publish(server, Id, "1.1.0", Code, new[] { one });
+            await Install(service, Id, "1.1.0");
+
+            Assert.Equal(new[] { one.file }, Directory.GetFiles(Path_("apps/wheelhouse")).Select(Path.GetFileName).ToArray());
+        }
+
+        [Fact]
+        public async Task CachePruning_KeepsTheWheelsOfOtherInstalledModules()
+        {
+            var (server, service, state) = Arrange();
+            var shared = Wheel("pkgone", ("pkgone/__init__.py", "one"));
+            Publish(server, Id, "1.0.0", Code, new[] { shared });
+            Publish(server, "app_other", "1.0.0", Code, new[] { shared, Wheel("pkgtwo", ("pkgtwo/__init__.py", "two")) });
+            await Install(service, Id, "1.0.0");
+            await Install(service, "app_other", "1.0.0");
+
+            Publish(server, Id, "1.1.0", Code, new[] { Wheel("pkgthree", ("pkgthree/__init__.py", "three")) });
+            await Install(service, Id, "1.1.0");
+
+            string[] cached = Directory.GetFiles(Path_("apps/wheelhouse")).Select(Path.GetFileName).OrderBy(n => n).ToArray();
+            Assert.Equal(new[] { shared.file, "pkgthree-1.0-py3-none-any.whl", "pkgtwo-1.0-py3-none-any.whl" }, cached);
+        }
+
+        [Fact]
         public async Task CodeUpdate_DeletesObsoleteFilesAndKeepsInstalledWheels()
         {
             var (server, service, state) = Arrange();
@@ -274,6 +308,59 @@ namespace SCT_Updater.Tests
 
             Assert.Equal(1, asked);
             Assert.False(Directory.Exists(Path_($"apps/{Id}")));
+        }
+
+        private async Task<(UpdateService service, FileStream locker)> ArrangeUpdateOverALockedFile()
+        {
+            var (server, service, state) = Arrange();
+            Publish(server, Id, "1.0.0", Code, new (string, byte[])[0]);
+            await Install(service, Id, "1.0.0");
+            state.SaveLocalVersion(Id, "1.0.0");
+            Publish(server, Id, "1.1.0", new[] { ($"apps/{Id}/__main__.py", "print('v2')"), ($"apps/{Id}/src/calc.py", "x = 1"), ("config/res.txt", "shared") },
+                new (string, byte[])[0]);
+            var locker = new FileStream(Path_($"apps/{Id}/__main__.py"), FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            return (service, locker);
+        }
+
+        [Fact]
+        public async Task LockedFile_HandlerRetry_ContinuesAfterRelease()
+        {
+            var (service, locker) = await ArrangeUpdateOverALockedFile();
+            int calls = 0;
+            service.FileInUseHandler = (id, attempt) =>
+            {
+                calls++;
+                locker.Dispose();
+                return Task.FromResult(FileInUseChoice.Retry);
+            };
+
+            await Install(service, Id, "1.1.0");
+
+            Assert.True(calls >= 1);
+            Assert.Equal("print('v2')", File.ReadAllText(Path_($"apps/{Id}/__main__.py")));
+        }
+
+        [Fact]
+        public async Task LockedFile_HandlerCancel_ThrowsOperationCanceled()
+        {
+            var (service, locker) = await ArrangeUpdateOverALockedFile();
+            service.FileInUseHandler = (id, attempt) => Task.FromResult(FileInUseChoice.Cancel);
+
+            using (locker)
+            {
+                await Assert.ThrowsAsync<OperationCanceledException>(() => Install(service, Id, "1.1.0"));
+            }
+        }
+
+        [Fact]
+        public async Task LockedFile_NoHandler_ThrowsOriginalIoError()
+        {
+            var (service, locker) = await ArrangeUpdateOverALockedFile();
+
+            using (locker)
+            {
+                await Assert.ThrowsAsync<IOException>(() => Install(service, Id, "1.1.0"));
+            }
         }
 
         [Fact]

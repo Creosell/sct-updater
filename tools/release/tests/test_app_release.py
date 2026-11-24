@@ -544,42 +544,204 @@ def test_zip_package_holds_the_whole_folder(tmp_path):
         "package_mode": "zip", "files": [{"path": "screen_checker_1.4.2.zip", "hash": ar.sha256_of(zip_path)}]}
 
 
-def fake_publish(tmp_path, monkeypatch, names):
-    build = tmp_path / "build"
-    monkeypatch.setattr(ar, "UPDATER_BUILD_DIR", build)
-    monkeypatch.setattr(ar.shutil, "which", lambda name: "dotnet")
+def write_dotnet_repo(tmp_path, extra=""):
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "App.csproj").write_text("<Project/>", encoding="utf-8")
+    (repo / "sct_app.toml").write_text(
+        'kind = "dotnet"\nid = "demo_app"\nproject = "src/App.csproj"\nexe = "Demo App.exe"\n' + extra, encoding="utf-8")
+    return repo
+
+
+def fake_publish(tmp_path, monkeypatch, names, which="C:/vs/MSBuild.exe"):
+    monkeypatch.setattr(ar, "BUILD_DIR", tmp_path / "build")
+    monkeypatch.setattr(ar.shutil, "which", lambda name: which)
     calls = []
 
     def run(command, check):
         calls.append(command)
-        build.mkdir(parents=True, exist_ok=True)
+        out = tmp_path / "build" / "demo_app"
+        out.mkdir(parents=True, exist_ok=True)
         for name in names:
-            (build / name).write_bytes(b"data")
+            (out / name).write_bytes(b"data")
 
-    return build, calls, run
+    return calls, run
 
 
-def test_publish_updater_publishes_release_into_a_clean_folder(tmp_path, monkeypatch):
-    build, calls, run = fake_publish(tmp_path, monkeypatch, ["Updater.exe"])
-    build.mkdir()
-    (build / "stale.txt").write_bytes(b"old")
+def test_load_dotnet_spec_reads_the_descriptor(tmp_path):
+    spec = ar.load_dotnet_spec(write_dotnet_repo(tmp_path, 'publish_profile = "FolderProfile"\n'))
 
-    assert ar.publish_updater(run=run) == build
+    assert (spec.id, spec.exe, spec.publish_profile) == ("demo_app", "Demo App.exe", "FolderProfile")
+    assert spec.project.name == "App.csproj"
 
+
+def test_load_dotnet_spec_rejects_a_missing_field_or_project(tmp_path):
+    repo = write_dotnet_repo(tmp_path)
+    (repo / "sct_app.toml").write_text('kind = "dotnet"\nid = "x"\n', encoding="utf-8")
+    with pytest.raises(ValueError, match="project"):
+        ar.load_dotnet_spec(repo)
+
+    (repo / "sct_app.toml").write_text('kind = "dotnet"\nid = "x"\nproject = "gone.csproj"\nexe = "x.exe"\n', encoding="utf-8")
+    with pytest.raises(FileNotFoundError, match="gone.csproj"):
+        ar.load_dotnet_spec(repo)
+
+
+def test_publish_dotnet_runs_msbuild_publish_into_a_clean_folder(tmp_path, monkeypatch):
+    spec = ar.load_dotnet_spec(write_dotnet_repo(tmp_path, 'publish_profile = "FolderProfile"\n'))
+    calls, run = fake_publish(tmp_path, monkeypatch, ["Demo App.exe"], which="C:/vs/MSBuild.exe")
+    monkeypatch.delenv("MSBUILD", raising=False)
+
+    stale = tmp_path / "build" / "demo_app"
+    stale.mkdir(parents=True)
+    (stale / "stale.txt").write_bytes(b"old")
+
+    out = ar.publish_dotnet(spec, run=run)
+
+    assert out == stale and not (out / "stale.txt").exists()
     command = calls[0]
-    assert command[:2] == ["dotnet", "publish"] and "Release" in command and str(build) in command
-    assert not (build / "stale.txt").exists()
+    assert command[0] == str(Path("C:/vs/MSBuild.exe")) and "-t:Publish" in command and "-p:PublishProfile=FolderProfile" in command
+    assert "-clp:ErrorsOnly" in command
+    assert any(part.startswith("-p:PublishDir=") for part in command) and not any("Rebuild" in part for part in command)
 
 
-def test_publish_updater_refuses_loose_dependencies(tmp_path, monkeypatch):
-    _, _, run = fake_publish(tmp_path, monkeypatch, ["Updater.exe", "Newtonsoft.Json.dll"])
+def test_publish_dotnet_refuses_loose_dependencies(tmp_path, monkeypatch):
+    spec = ar.load_dotnet_spec(write_dotnet_repo(tmp_path))
+    _, run = fake_publish(tmp_path, monkeypatch, ["Demo App.exe", "Newtonsoft.Json.dll"])
 
     with pytest.raises(SystemExit, match="single exe"):
-        ar.publish_updater(run=run)
+        ar.publish_dotnet(spec, run=run)
 
 
-def test_publish_updater_needs_dotnet(monkeypatch):
+def test_find_msbuild_exits_without_any_msbuild(monkeypatch, tmp_path):
+    monkeypatch.delenv("MSBUILD", raising=False)
     monkeypatch.setattr(ar.shutil, "which", lambda name: None)
+    monkeypatch.setenv("ProgramFiles(x86)", str(tmp_path))
 
-    with pytest.raises(SystemExit, match="dotnet"):
-        ar.publish_updater()
+    with pytest.raises(SystemExit, match="MSBuild not found"):
+        ar.find_msbuild()
+
+
+def test_find_msbuild_prefers_the_environment_variable_then_path(monkeypatch):
+    monkeypatch.setattr(ar.shutil, "which", lambda name: "C:/path/MSBuild.exe")
+    monkeypatch.delenv("MSBUILD", raising=False)
+    assert ar.find_msbuild() == Path("C:/path/MSBuild.exe")
+
+    monkeypatch.setenv("MSBUILD", "D:/tools/MSBuild.exe")
+    assert ar.find_msbuild() == Path("D:/tools/MSBuild.exe")
+
+
+def run_dotnet_release(tmp_path, monkeypatch, built_version, requested=None):
+    repo = write_dotnet_repo(tmp_path)
+    monkeypatch.setattr(ar, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(ar, "publish_dotnet", lambda spec: tmp_path / "build" / "demo_app")
+    monkeypatch.setattr(ar, "read_exe_version", lambda exe: built_version)
+    (tmp_path / "build" / "demo_app").mkdir(parents=True)
+    (tmp_path / "build" / "demo_app" / "Demo App.exe").write_bytes(b"MZ")
+    ar.cmd_app(SimpleNamespace(module=str(repo), version=requested, upload=False))
+    return tmp_path / "release_artifacts"
+
+
+def test_app_command_releases_a_dotnet_repository_with_the_version_of_the_built_exe(tmp_path, monkeypatch):
+    out = run_dotnet_release(tmp_path, monkeypatch, "2.4.1")
+
+    manifest = json.loads((out / "demo_app_2.4.1.json").read_text(encoding="utf-8"))
+    assert manifest["product_id"] == "demo_app" and manifest["package_mode"] == "zip"
+    assert (out / "demo_app_2.4.1.zip").is_file()
+
+
+def test_app_command_stops_when_the_requested_version_is_not_the_built_one(tmp_path, monkeypatch):
+    with pytest.raises(SystemExit, match="1.4.2"):
+        run_dotnet_release(tmp_path, monkeypatch, "1.4.1", requested="1.4.2")
+
+
+def test_app_command_needs_a_version_for_a_python_module(tmp_path):
+    module = write_module(tmp_path, DESCRIPTOR)
+
+    with pytest.raises(SystemExit, match="version"):
+        ar.cmd_app(SimpleNamespace(module=str(module), version=None, upload=False))
+
+
+# --- gc of the server runtime files ---
+
+class RemoteTree:
+    """Fake server tree {path: bytes} with the listing, download and delete calls used by gc."""
+
+    def __init__(self, tree):
+        self.tree = dict(tree)
+        self.files = self
+
+    async def listdir(self, path):
+        prefix = path.rstrip("/") + "/"
+        kids = {p[len(prefix):]: len(b) for p, b in self.tree.items() if p.startswith(prefix) and "/" not in p[len(prefix):]}
+        if not kids:
+            raise NextcloudException(404, "Not Found")
+        return [SimpleNamespace(name=n, is_dir=False, info=SimpleNamespace(content_length=s)) for n, s in kids.items()]
+
+    async def download(self, path):
+        if path not in self.tree:
+            raise NextcloudException(404, "Not Found")
+        return self.tree[path]
+
+    async def delete(self, path):
+        del self.tree[path]
+
+
+def gc_tree(suite=None, manifests=None):
+    def js(value):
+        return json.dumps(value).encode()
+
+    root = ar.REMOTE_ROOT
+    tree = {
+        f"{root}/suite_manifest.json": js(suite or {"products": [{"id": "demo", "latest_version": "2.0.0"}],
+                                                  "dev": [{"id": "demo", "latest_version": "2.1.0"}]}),
+        f"{ar.WHEELS_REMOTE}/a.whl": b"a", f"{ar.WHEELS_REMOTE}/b.whl": b"b", f"{ar.WHEELS_REMOTE}/old.whl": b"o",
+        f"{ar.PYTHON_REMOTE}/py-3.13.5.zip": b"z", f"{ar.PYTHON_REMOTE}/py-3.13.1.zip": b"z",
+        f"{root}/runtime/python_3.13.json": js({"file": "py-3.13.5.zip"}),
+    }
+    for version, wheels in (manifests or {"2.0.0": ["a.whl"], "2.1.0": ["a.whl", "b.whl"]}).items():
+        manifest = {"package_mode": "app", "wheels": [{"file": w} for w in wheels]}
+        tree[f"{root}/versions/demo/demo_{version}.json"] = js(manifest)
+    return tree
+
+
+def run_gc(tree, delete):
+    nc = RemoteTree(tree)
+
+    async def connect():
+        return nc
+
+    original = ar.get_nc_client
+    ar.get_nc_client = connect
+    try:
+        ar.cmd_gc(SimpleNamespace(delete=delete))
+    finally:
+        ar.get_nc_client = original
+    return nc
+
+
+def test_gc_keeps_what_the_products_and_dev_versions_use_and_only_lists_without_delete():
+    nc = run_gc(gc_tree(), delete=False)
+
+    assert f"{ar.WHEELS_REMOTE}/old.whl" in nc.tree and f"{ar.PYTHON_REMOTE}/py-3.13.1.zip" in nc.tree
+
+
+def test_gc_deletes_unused_wheels_and_python_archives():
+    nc = run_gc(gc_tree(), delete=True)
+
+    assert f"{ar.WHEELS_REMOTE}/old.whl" not in nc.tree and f"{ar.PYTHON_REMOTE}/py-3.13.1.zip" not in nc.tree
+    for kept in (f"{ar.WHEELS_REMOTE}/a.whl", f"{ar.WHEELS_REMOTE}/b.whl", f"{ar.PYTHON_REMOTE}/py-3.13.5.zip"):
+        assert kept in nc.tree
+
+
+def test_gc_refuses_to_judge_when_a_listed_manifest_is_missing():
+    tree = gc_tree(manifests={"2.0.0": ["a.whl"]})
+
+    with pytest.raises(SystemExit, match="2.1.0"):
+        run_gc(tree, delete=True)
+
+
+def test_gc_refuses_when_no_app_version_is_listed():
+    tree = gc_tree(manifests={"2.0.0": [], "2.1.0": []})
+
+    with pytest.raises(SystemExit, match="No app version"):
+        run_gc(tree, delete=True)

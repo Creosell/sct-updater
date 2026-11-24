@@ -12,7 +12,6 @@ Windows application for managing updates of Screen Check Tool (SCT) suite compon
 - **Parallel downloads** — up to 20 simultaneous downloads via `HttpClient`
 - **Local state tracking** — installed versions persisted in `local_versions.json`
 - **Credentials via `.env`** — Nextcloud connection loaded from `.env` at startup (`NC_USER_QA`, `NC_PASSWORD_QA`, `NC_SERVER_URL_QA`)
-- **Driver support** — drivers downloaded to `drivers/` folder; installation triggered manually via `install.bat`
 
 ## Requirements
 
@@ -35,7 +34,7 @@ The Updater and all Python modules are released with one tool, `tools/release/ap
 
 ### Build specifics
 
-The project is SDK-style and targets **.NET 8** (`net8.0-windows`, framework-dependent). Only the .NET 8 SDK is needed: `dotnet build SCT_Updater/SCT_Updater.csproj -c Release`. The release package is a single-file `Updater.exe` made by `dotnet publish` (`PublishSingleFile`), so there is no separate dll and no Costura.Fody.
+The project is SDK-style and targets **.NET 8** (`net8.0-windows`, framework-dependent, single-file). Build it with `dotnet build SCT_Updater/SCT_Updater.csproj -c Release` (the .NET 8 SDK is enough for development and tests). The release package is built by the release tool with **MSBuild** (publish, Release): MSBuild comes with Visual Studio or the free Visual Studio Build Tools (".NET desktop build tools" workload); the tool takes it from the `MSBUILD` environment variable, then from `PATH`, then finds it with vswhere. It is the same build path for every .NET project (Screen Checker needs MSBuild for its COM reference).
 
 ### Release steps
 
@@ -48,12 +47,12 @@ Create `tools/release/.env` based on `tools/release/.env.example` and fill in yo
 From the repo root (without `--upload` it is a dry run: the Updater is built and packaged, nothing is sent):
 
 ```bash
-uv run tools/release/app_release.py updater --upload
+uv run tools/release/app_release.py app . --upload
 ```
 
-The tool publishes the Updater (`dotnet publish`, Release) into the clean folder `release_artifacts/build/suite_updater`, so the package is never stale and holds nothing but the fresh build. The Updater must stay a single exe; the tool refuses to package a build with loose dlls. The version is read from the built `Updater.exe` (`AssemblyVersion` / `FileVersion` in `SCT_Updater.csproj`), so it cannot differ from the build. The tool zips the folder, uploads the zip to `SCT/Updater/versions/suite_updater/<version>/` and publishes the manifest last. The files are also written to `release_artifacts/` (gitignored).
+`sct_app.toml` in the repository root (`kind = "dotnet"`, project and exe name) tells the tool what to build. It publishes the project with MSBuild (Release) into the clean folder `release_artifacts/build/suite_updater`, so the package is never stale and holds nothing but the fresh build. The Updater must stay a single exe; the tool refuses to package a build with loose dlls. The version is read from the built `Updater.exe` (`AssemblyVersion` / `FileVersion` in `SCT_Updater.csproj`); a version given on the command line must match it. The tool zips the folder, uploads the zip to `SCT/Updater/versions/suite_updater/<version>/` and publishes the manifest last. The files are also written to `release_artifacts/` (gitignored).
 
-Any other build folder is released with the same tool: `uv run tools/release/app_release.py zip <folder> <product_id> <version> --upload` (a dry run without `--upload`).
+Any other .NET project is released the same way from its own repository: add a `sct_app.toml` with `kind = "dotnet"` there and run `uv run tools/release/app_release.py app <path of the repository> --upload`. A folder that is already built is released with `uv run tools/release/app_release.py zip <folder> <product_id> <version> --upload`.
 
 **3. Roll it out**
 

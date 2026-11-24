@@ -15,7 +15,6 @@ namespace SCT_Updater
 
         // --- Package modes (file manifest "package_mode") ---
         public const string PACKAGE_MODE_ZIP = "zip";
-        public const string PACKAGE_MODE_RUNTIME_SHARE = "runtime-share";
         public const string PACKAGE_MODE_APP = "app";
 
         // --- Python modules ("app" packages), relative to the application folder ---
@@ -24,20 +23,13 @@ namespace SCT_Updater
         public const string WHEELHOUSE_DIR = "apps/wheelhouse";
         public const string DEFAULT_WHEELS_URL = "runtime/wheels";
 
-        /// <summary>Shared blob store (relative to the Updater root) used when a manifest has no "store_url".</summary>
-        public const string DEFAULT_STORE_URL = "versions/python_runtime";
-
         // --- NEW: Config Constants ---
         public const string LOCAL_DEVICE_CONFIGS_PATH = "config/device_configs";
         public const string DEVICE_CONFIGS_ID = "device_configs";
 
-        // --- NEW: Driver Constants ---
-        public const string LOCAL_DRIVERS_PATH = "drivers";
-
         // --- Nextcloud Path ---
         private const string NC_FILES_PATH = "/SCT/Updater";
         private const string NC_DEVICE_CONFIGS_PATH_SUFFIX = "/device_configs";
-        private const string NC_DRIVERS_PATH_SUFFIX = "/drivers";
 
 
         // --- Loaded from .env ---
@@ -52,7 +44,6 @@ namespace SCT_Updater
         public static string NC_WEBDAV_BASE_URL { get; private set; }
         public static string SUITE_MANIFEST_URL { get; private set; }
         public static string NC_DEVICE_CONFIGS_URL { get; private set; }
-        public static string NC_DRIVERS_URL { get; private set; }
 
         /// <summary>
         /// Loads the configuration from the .env file located next to the executable.
@@ -106,7 +97,6 @@ namespace SCT_Updater
             NC_WEBDAV_BASE_URL = $"{NC_SERVER_URL}/remote.php/dav/files/{NC_USER}{NC_FILES_PATH}";
             SUITE_MANIFEST_URL = $"{NC_WEBDAV_BASE_URL}/suite_manifest.json";
             NC_DEVICE_CONFIGS_URL = $"{NC_WEBDAV_BASE_URL}{NC_DEVICE_CONFIGS_PATH_SUFFIX}";
-            NC_DRIVERS_URL = $"{NC_WEBDAV_BASE_URL}{NC_DRIVERS_PATH_SUFFIX}";
         }
     }
 }

@@ -60,14 +60,6 @@ namespace SCT_Updater.Tests
         }
 
         /// <summary>
-        /// Publishes a blob in the shared store under the given hash (not necessarily the real hash of the content).
-        /// </summary>
-        /// <param name="hash">Hash the blob is addressed by.</param>
-        /// <param name="content">Blob content.</param>
-        public void PutStoreBlob(string hash, byte[] content) =>
-            Put($"{AppConfig.NC_WEBDAV_BASE_URL}/{AppConfig.DEFAULT_STORE_URL}/{hash.Substring(0, 2)}/{hash}", content);
-
-        /// <summary>
         /// Publishes arbitrary content at a path relative to the Updater root on the server.
         /// </summary>
         /// <param name="relativePath">Path below SCT/Updater, e.g. "runtime/wheels/a.whl".</param>
