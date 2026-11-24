@@ -93,6 +93,16 @@ namespace SCT_Updater.Tests
         }
 
         [Fact]
+        public void BuildRestartArguments_PassesFoldersWithoutTrailingSeparators()
+        {
+            string args = Utility.BuildRestartArguments(@"C:\SCT\", @"C:\Temp\SCT_Updater_New\", "Updater.exe");
+
+            Assert.Contains(@"robocopy ""C:\Temp\SCT_Updater_New"" ""C:\SCT"" /E /IS /MOVE", args);
+            Assert.Contains(@"rmdir /s /q ""C:\Temp\SCT_Updater_New""", args);
+            Assert.EndsWith(@"start """" ""C:\SCT\Updater.exe""", args);
+        }
+
+        [Fact]
         public void LocalState_LegacyFileWithoutHash_LoadsWithNullHash()
         {
             File.WriteAllText(_stateFile, "{ \"installed_products\": [ { \"id\": \"p\", \"version\": \"1.0.0\" } ] }");

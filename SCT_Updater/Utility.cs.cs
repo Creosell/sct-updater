@@ -34,17 +34,35 @@ namespace SCT_Updater
             }
         }
 
+        /// <summary>
+        /// Builds the cmd.exe arguments of the restart: wait, move the new files over the installation, remove the temp
+        /// folder and start the application. Both folders are passed without a trailing separator, because a backslash
+        /// before the closing quote escapes it for robocopy (exit code 16, nothing is copied).
+        /// </summary>
+        /// <param name="currentDir">Installation folder (may end with a separator).</param>
+        /// <param name="tempDir">Folder with the new files (may end with a separator).</param>
+        /// <param name="exeName">File name of the executable to start.</param>
+        public static string BuildRestartArguments(string currentDir, string tempDir, string exeName)
+        {
+            char[] separators = { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar };
+            currentDir = currentDir.TrimEnd(separators);
+            tempDir = tempDir.TrimEnd(separators);
+            return $"/C ping 127.0.0.1 -n 2 > nul & " +
+                   $"robocopy \"{tempDir}\" \"{currentDir}\" /E /IS /MOVE > nul & " +
+                   $"rmdir /s /q \"{tempDir}\" & " +
+                   $"start \"\" \"{Path.Combine(currentDir, exeName)}\"";
+        }
+
+        /// <summary>
+        /// Restarts the application after a self-update: a hidden cmd.exe chain (no .bat file on disk) replaces the files
+        /// and starts the new executable once this process has exited.
+        /// </summary>
+        /// <param name="currentDir">Installation folder.</param>
+        /// <param name="tempDir">Folder with the new files.</param>
+        /// <param name="exeName">File name of the executable to start.</param>
         public static void RestartApp(string currentDir, string tempDir, string exeName)
         {
-            // Chain commands directly in arguments to avoid creating a .bat file on disk (Dropper behavior)
-            // 1. Wait 2 seconds (ping hack)
-            // 2. Robocopy moves files (more robust than xcopy/move)
-            // 3. Remove temp dir
-            // 4. Start app
-            string cmdArgs = $"/C ping 127.0.0.1 -n 2 > nul & " +
-                             $"robocopy \"{tempDir}\" \"{currentDir}\" /E /IS /MOVE > nul & " +
-                             $"rmdir /s /q \"{tempDir}\" & " +
-                             $"start \"\" \"{Path.Combine(currentDir, exeName)}\"";
+            string cmdArgs = BuildRestartArguments(currentDir, tempDir, exeName);
 
             Process.Start(new ProcessStartInfo
             {

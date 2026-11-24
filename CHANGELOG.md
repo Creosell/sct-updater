@@ -29,6 +29,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `tools/release/release_manager.py` (replaced by `app_release.py app` and `app_release.py zip`)
 
 ### Fixed
+- Self-update copied nothing: `Application.StartupPath` ends with a backslash on .NET 8, which escaped the closing quote of the robocopy command, so the Updater restarted in an endless loop with the old files
 - The `logs` folder is created when missing, so a log is written in a clean installation folder
 
 ---
