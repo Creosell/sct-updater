@@ -2,7 +2,7 @@
 using Newtonsoft.Json;
 using System.Collections.Generic;
 
-namespace SCT_Updater
+namespace Updater
 {
     public class SuiteManifest
     {

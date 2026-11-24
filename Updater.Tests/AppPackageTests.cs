@@ -10,7 +10,7 @@ using System.Windows.Forms;
 using Newtonsoft.Json;
 using Xunit;
 
-namespace SCT_Updater.Tests
+namespace Updater.Tests
 {
     /// <summary>
     /// Covers the "app" package mode: module code, wheels unpacked next to it and the shared embeddable Python.

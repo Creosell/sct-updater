@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <RootNamespace>Updater.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Updater\AppConfig.cs" Link="Sources\AppConfig.cs" />
+    <Compile Include="..\Updater\LocalStateService.cs" Link="Sources\LocalStateService.cs" />
+    <Compile Include="..\Updater\Logger.cs" Link="Sources\Logger.cs" />
+    <Compile Include="..\Updater\ManifestClasses.cs" Link="Sources\ManifestClasses.cs" />
+    <Compile Include="..\Updater\NextcloudClient.cs" Link="Sources\NextcloudClient.cs" />
+    <Compile Include="..\Updater\SelfUpdateGuard.cs" Link="Sources\SelfUpdateGuard.cs" />
+    <Compile Include="..\Updater\UpdateService.cs" Link="Sources\UpdateService.cs" />
+    <Compile Include="..\Updater\UpdateService.App.cs" Link="Sources\UpdateService.App.cs" />
+    <Compile Include="..\Updater\Utility.cs" Link="Sources\Utility.cs" />
+    <Compile Include="..\Updater\WheelInstaller.cs" Link="Sources\WheelInstaller.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+</Project>

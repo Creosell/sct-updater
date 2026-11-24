@@ -6,7 +6,7 @@ using System.Text;
 using System.Threading.Tasks;
 using Xunit;
 
-namespace SCT_Updater.Tests
+namespace Updater.Tests
 {
     [Collection("AppConfig")]
     public class ClientAndStateTests : IDisposable

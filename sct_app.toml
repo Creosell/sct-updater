@@ -1,4 +1,4 @@
 kind = "dotnet"
 id = "suite_updater"
-project = "SCT_Updater/SCT_Updater.csproj"
+project = "Updater/Updater.csproj"
 exe = "Updater.exe"

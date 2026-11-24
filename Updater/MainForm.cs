@@ -10,7 +10,7 @@ using System.Net; // For ServicePointManager
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
-namespace SCT_Updater
+namespace Updater
     {
     public partial class MainForm : Form
         {

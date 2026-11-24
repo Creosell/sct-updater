@@ -7,7 +7,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
-namespace SCT_Updater
+namespace Updater
 {
     /// <summary>
     /// Keeps a numbered history of log files: the current file becomes ".1", the previous ".1" becomes ".2", and so on.

@@ -8,7 +8,7 @@ WinForms desktop application (.NET 8, `net8.0-windows`) for managing updates of 
 
 ## Build & Run
 
-**Build:** `dotnet build SCT_Updater/SCT_Updater.csproj -c Release` (the .NET 8 SDK is enough for development and tests).
+**Build:** `dotnet build Updater/Updater.csproj -c Release` (the .NET 8 SDK is enough for development and tests).
 Release package: built by `app_release.py app .` with **MSBuild** (publish, Release; Visual Studio or Build Tools, found through `MSBUILD`, `PATH` or vswhere): one framework-dependent single-file `Updater.exe` (about 2 MB; the .NET 8 Desktop Runtime must be installed, as for Screen Checker).
 
 > **Requirement: the Updater is a single `Updater.exe`.** It is produced by `PublishSingleFile` (the project is SDK-style, so Costura.Fody is no longer used), and `app_release.py app .` refuses to package a build with loose dlls. Any change of the build must keep this.
@@ -40,7 +40,7 @@ Release package: built by `app_release.py app .` with **MSBuild** (publish, Rele
 
 ## Configuration
 
-Runtime credentials in `SCT_Updater/.env` (gitignored):
+Runtime credentials in `Updater/.env` (gitignored):
 ```
 NC_SERVER_URL_QA=https://your-nextcloud.example.com
 NC_USER_QA=your_username
@@ -49,7 +49,7 @@ NC_PASSWORD_QA=your_app_password
 
 ## Version
 
-Current version: **1.2.0** (set in `SCT_Updater\SCT_Updater.csproj` — `AssemblyVersion` / `FileVersion`). See [CHANGELOG.md](CHANGELOG.md) for history.
+Current version: **1.2.0** (set in `Updater\Updater.csproj` — `AssemblyVersion` / `FileVersion`). See [CHANGELOG.md](CHANGELOG.md) for history.
 
 ## Releasing
 
@@ -70,7 +70,7 @@ Renamed exes: list the old file names in `obsolete = [...]` of `sct_app.toml`; t
 
 The full process, file layout, rules (one Python minor version, `SCT_ROOT`, no `import site`, `AsyncNextcloud`) and implementation status are in [docs/module-release.md](docs/module-release.md). **Keep that file and the instructions of every module repository in sync when the release process changes.**
 
-Tests: `dotnet test SCT_Updater.Tests/SCT_Updater.Tests.csproj` (Updater), `python -m pytest tools/release/tests` (release tool).
+Tests: `dotnet test Updater.Tests/Updater.Tests.csproj` (Updater), `python -m pytest tools/release/tests` (release tool).
 
 ## Communication Style & Code Standards
 

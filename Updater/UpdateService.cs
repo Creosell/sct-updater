@@ -9,7 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
-namespace SCT_Updater
+namespace Updater
 {
     /// <summary>Decision of the user when a file of the module being updated is in use.</summary>
     public enum FileInUseChoice

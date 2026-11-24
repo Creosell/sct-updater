@@ -9,7 +9,7 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Xml.Linq;
 
-namespace SCT_Updater
+namespace Updater
 {
     public class NextcloudClient
     {

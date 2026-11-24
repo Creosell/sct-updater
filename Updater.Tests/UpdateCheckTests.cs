@@ -5,7 +5,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Xunit;
 
-namespace SCT_Updater.Tests
+namespace Updater.Tests
 {
     /// <summary>
     /// Runs <see cref="UpdateService.CheckForUpdatesAsync"/> against an in-memory server.

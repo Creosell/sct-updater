@@ -4,7 +4,7 @@ using System.IO;
 using System.Text;
 using Xunit;
 
-namespace SCT_Updater.Tests
+namespace Updater.Tests
 {
     /// <summary>
     /// Covers the self-update loop guard, the restart report and the log rotation.

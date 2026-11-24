@@ -3,7 +3,7 @@ using System;
 using System.IO;
 using System.Windows.Forms;
 
-namespace SCT_Updater
+namespace Updater
 {
     public static class AppConfig
     {

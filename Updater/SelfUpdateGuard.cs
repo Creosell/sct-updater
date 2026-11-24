@@ -5,7 +5,7 @@ using System.Linq;
 using System.Text;
 using Newtonsoft.Json;
 
-namespace SCT_Updater
+namespace Updater
 {
     /// <summary>
     /// Detects a self-update that did not replace the Updater (it would restart and try again forever) and carries the

@@ -362,7 +362,7 @@ MigrationBackup/
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
 # Credentials
-/SCT_Updater/.env
+/Updater/.env
 
 # Release tools
 !tools/release/

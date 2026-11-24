@@ -9,7 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
-namespace SCT_Updater
+namespace Updater
 {
     /// <summary>
     /// Installation of Python modules ("app" packages): module code under apps/&lt;module&gt;, its wheels unpacked next to the

@@ -117,7 +117,7 @@ understand that manifest.
 ## Testing
 
 ```bash
-dotnet test SCT_Updater.Tests/SCT_Updater.Tests.csproj     # Updater (49 tests)
+dotnet test Updater.Tests/Updater.Tests.csproj     # Updater (49 tests)
 python -m pytest tools/release/tests                       # release tool (63 tests)
 cd launcher && SCT_APP=demo cargo test                    # launcher (4 tests)
 ```

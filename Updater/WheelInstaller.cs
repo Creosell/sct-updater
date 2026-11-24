@@ -3,7 +3,7 @@ using System;
 using System.IO;
 using System.IO.Compression;
 
-namespace SCT_Updater
+namespace Updater
 {
     /// <summary>
     /// Installs Python wheels (zip archives) into a site-packages folder by plain extraction,

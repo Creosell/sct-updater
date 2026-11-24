@@ -11,7 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Without a valid `.env` the updater closes at startup and makes no server requests
 - Update channels: `dev` list in `suite_manifest.json`, selected with `NC_CHANNEL=dev` in `.env` (title shows `[DEV]`); falls back to `products` when `dev` is missing or empty
 - Rebuild detection: SHA256 of the installed file manifest is stored in `local_versions.json` (`manifest_hash`); if the server manifest of the same version differs, the product is flagged "Rebuilt" and a reinstall is offered
-- `SCT_Updater.Tests` project (xUnit) covering channel resolution, rebuild detection, local state, wheel installation and app packages
+- `Updater.Tests` project (xUnit) covering channel resolution, rebuild detection, local state, wheel installation and app packages
 - Rust launcher (`launcher/`) that starts a Python module from `apps/python_runtime` with `SCT_ROOT` set, built by `app_release.py` with the module icon and file properties (file version = module release version)
 - `app_release.py app`: the Updater and every other .NET project are released with the same tool as the modules (`sct_app.toml` with `kind = "dotnet"`; built with MSBuild into a clean folder, single-exe check, version read from the built exe, manifest published last)
 - The Updater deletes cached wheels (`apps/wheelhouse`) that no installed module uses after every install; `app_release.py gc` lists (`--delete` removes) wheels and Python archives on the server that no version in `products`/`dev` uses
@@ -23,7 +23,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 - `Form1` renamed to `MainForm`, `Utility.cs.cs` to `Utility.cs`
 - `description` removed from the suite manifest and the module grid
-- Ported to .NET 8 (`net8.0-windows`, SDK-style project, framework-dependent single-file `Updater.exe`); Costura.Fody and `packages.config` removed, the version now lives in `SCT_Updater.csproj`
+- Ported to .NET 8 (`net8.0-windows`, SDK-style project, framework-dependent single-file `Updater.exe`); Costura.Fody and `packages.config` removed, the version now lives in `Updater.csproj`
 - New `app_release.py zip <folder> <product_id> <version>` releases any build folder
 
 ### Removed

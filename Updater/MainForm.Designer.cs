@@ -1,4 +1,4 @@
-﻿namespace SCT_Updater
+﻿namespace Updater
 {
     partial class MainForm
     {

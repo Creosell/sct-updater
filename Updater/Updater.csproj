@@ -4,7 +4,7 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
-    <RootNamespace>SCT_Updater</RootNamespace>
+    <RootNamespace>Updater</RootNamespace>
     <AssemblyName>Updater</AssemblyName>
     <ApplicationIcon>images\earth-arrow-down.ico</ApplicationIcon>
     <ApplicationManifest>Properties\app.manifest</ApplicationManifest>
@@ -12,7 +12,7 @@
     <FileVersion>1.2.0.0</FileVersion>
     <Description>Updater for Screen Check Tool modules</Description>
     <Company>Sberdevices China</Company>
-    <Product>SCT_Updater</Product>
+    <Product>Updater</Product>
     <Copyright>© 2025 Pavel Sheshko</Copyright>
     <NeutralLanguage>en-US</NeutralLanguage>
     <Deterministic>true</Deterministic>

@@ -7,7 +7,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace SCT_Updater.Tests
+namespace Updater.Tests
 {
     /// <summary>
     /// In-memory Nextcloud stand-in: serves registered paths and answers 404 for everything else.

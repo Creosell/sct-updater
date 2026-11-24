@@ -8,7 +8,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Xunit;
 
-namespace SCT_Updater.Tests
+namespace Updater.Tests
 {
     public class WheelInstallerTests : IDisposable
     {
