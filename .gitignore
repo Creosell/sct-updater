@@ -375,3 +375,5 @@ graphify-out/.rebuild.lock
 
 # Python tooling
 __pycache__/
+/.idea/
+/.claude/
