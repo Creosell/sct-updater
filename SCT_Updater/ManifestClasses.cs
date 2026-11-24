@@ -71,6 +71,9 @@ namespace SCT_Updater
         [JsonProperty("files")]
         public List<ManifestFile> Files { get; set; }
 
+        [JsonProperty("obsolete", NullValueHandling = NullValueHandling.Ignore)]
+        public List<string> Obsolete { get; set; } // File names in the Updater root to delete on install (renamed exes)
+
         [JsonProperty("python", NullValueHandling = NullValueHandling.Ignore)]
         public string Python { get; set; } // Python minor version of an "app" package, e.g. "3.13"
         [JsonProperty("wheels_url", NullValueHandling = NullValueHandling.Ignore)]

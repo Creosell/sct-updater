@@ -17,6 +17,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - The Updater deletes cached wheels (`apps/wheelhouse`) that no installed module uses after every install; `app_release.py gc` lists (`--delete` removes) wheels and Python archives on the server that no version in `products`/`dev` uses
 - `app` package mode for Python modules: shared embeddable Python in `apps/python_runtime`, module code and wheels in `apps/<module>` (wheels verified by SHA256, cached in `apps/wheelhouse`), clean migration from `zip`; see `docs/module-release.md`
 
+- `obsolete` list in `sct_app.toml` and in the manifest: the Updater deletes the listed old file names (renamed exes) from its root on install and update, for every package mode; replaces the hardcoded list for Screen Checker
+
 ### Changed
 - `description` removed from the suite manifest and the module grid
 - Ported to .NET 8 (`net8.0-windows`, SDK-style project, framework-dependent single-file `Updater.exe`); Costura.Fody and `packages.config` removed, the version now lives in `SCT_Updater.csproj`

@@ -32,19 +32,40 @@ namespace SCT_Updater
         /// </summary>
         public Func<string, int, Task<FileInUseChoice>> FileInUseHandler { get; set; }
 
-        private static readonly Dictionary<string, string[]> _legacyFiles = new Dictionary<string, string[]>
+        /// <summary>
+        /// Deletes the files that the manifest lists as obsolete (for example an exe that was renamed) from the Updater root.
+        /// Only plain file names are accepted; anything that is also a file of the manifest is kept.
+        /// </summary>
+        /// <param name="manifest">Manifest of the version being installed.</param>
+        private void CleanupObsoleteFiles(FileManifest manifest)
         {
-            { "screen_checker", new[] { "WPF LCD Test.exe" } }
-        };
-
-        private void CleanupLegacyFiles(string productId)
-        {
-            if (!_legacyFiles.TryGetValue(productId, out string[] files)) return;
             string root = Application.StartupPath;
-            foreach (string file in files)
+            foreach (string file in GetObsoleteFiles(manifest))
             {
-                Log.Debug($"Removing legacy file: {file}");
+                Log.Debug($"Removing obsolete file: {file}");
                 Utility.DeletePath(Path.Combine(root, file));
+            }
+        }
+
+        /// <summary>
+        /// Returns the obsolete file names of a manifest that are safe to delete: plain names inside the root that are not
+        /// part of the manifest's own files.
+        /// </summary>
+        /// <param name="manifest">Manifest of the version being installed.</param>
+        public static IEnumerable<string> GetObsoleteFiles(FileManifest manifest)
+        {
+            if (manifest?.Obsolete == null) yield break;
+            var own = new HashSet<string>((manifest.Files ?? new List<ManifestFile>()).Select(f => f.Path), StringComparer.OrdinalIgnoreCase);
+            foreach (string name in manifest.Obsolete)
+            {
+                bool plain = !string.IsNullOrWhiteSpace(name) && name == Path.GetFileName(name) && name != "." && name != "..";
+                if (!plain)
+                {
+                    Log.Warn($"Ignoring the obsolete entry '{name}': only plain file names are allowed.");
+                    continue;
+                }
+                if (own.Contains(name)) continue;
+                yield return name;
             }
         }
 
@@ -493,7 +514,7 @@ namespace SCT_Updater
                 });
                 File.Delete(tempZipPath);
                 Log.Debug("Extraction complete. Temp ZIP deleted.");
-                CleanupLegacyFiles(manifest.ProductId);
+                CleanupObsoleteFiles(manifest);
             }
             catch (InvalidDataException ex)
             {
@@ -581,6 +602,7 @@ namespace SCT_Updater
         public async Task StartModuleUpdate_Files(FileManifest newManifest, Dictionary<string, string> oldFiles, IProgress<string> statusProgress, IProgress<int> percentProgress)
         {
             Log.Debug($"Starting FILES update for {newManifest.ProductId}...");
+            CleanupObsoleteFiles(newManifest);
             int filesDone = 0;
             var semaphore = new SemaphoreSlim(AppConfig.MAX_PARALLEL_DOWNLOADS);
             var allDownloadTasks = new List<Task>();

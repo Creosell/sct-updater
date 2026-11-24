@@ -102,6 +102,41 @@ namespace SCT_Updater.Tests
         };
 
         [Fact]
+        public async Task Install_DeletesTheObsoleteFilesOfTheManifest()
+        {
+            var (server, service, _) = Arrange();
+            string renamed = Path_("Old Name.exe");
+            File.WriteAllText(renamed, "old");
+            try
+            {
+                var manifest = Publish(server, Id, "1.0.0", Code, new (string, byte[])[0]);
+                manifest.Obsolete = new List<string> { "Old Name.exe" };
+                server.PutFileManifest(Id, "1.0.0", JsonConvert.SerializeObject(manifest));
+
+                await Install(service, Id, "1.0.0");
+
+                Assert.False(File.Exists(renamed));
+            }
+            finally
+            {
+                if (File.Exists(renamed)) File.Delete(renamed);
+            }
+        }
+
+        [Fact]
+        public void GetObsoleteFiles_AcceptsOnlyPlainNamesThatAreNotFilesOfThePackage()
+        {
+            var manifest = new FileManifest
+            {
+                Files = new List<ManifestFile> { new ManifestFile { Path = "Keep.exe", Hash = "a" } },
+                Obsolete = new List<string> { "Old.exe", @"..\evil.exe", "sub/other.exe", "..", "", "keep.exe" }
+            };
+
+            Assert.Equal(new[] { "Old.exe" }, UpdateService.GetObsoleteFiles(manifest));
+            Assert.Empty(UpdateService.GetObsoleteFiles(new FileManifest()));
+        }
+
+        [Fact]
         public void Manifest_WrittenByTheReleaseTool_IsReadByTheUpdater()
         {
             const string json = @"{

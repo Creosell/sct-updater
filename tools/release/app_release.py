@@ -34,12 +34,14 @@ sct_app.toml of a .NET project (kind = "dotnet"):
     project = "WPF LCD Test/Screen Checker.csproj"
     exe = "Screen Checker.exe"          # the built exe; its file version is the release version
     publish_profile = "FolderProfile"   # optional: publish profile of the project (single-file settings)
+    obsolete = ["WPF LCD Test.exe"]     # optional: files in the Updater root that an install deletes (renamed exes)
 
 sct_app.toml (in the module repository):
     id = "report_generator"
     launcher = "Report Generator.exe"  # optional: Rust launcher built with cargo, installed at the Updater root
     title = "Report Generator"         # optional: shown as the file description of the launcher (default: id)
     icon = "assets/app.ico"            # optional: icon of the launcher, a .ico file in the module repository
+    obsolete = ["ReportGenerator.exe"] # optional: files in the Updater root that an install deletes (renamed exes)
     [[files]]                          # source (file or folder) -> destination under apps/<id>/
     src = "main.py"
     dst = "__main__.py"
@@ -110,6 +112,7 @@ class AppSpec:
     launcher: str | None = None
     title: str | None = None
     icon: Path | None = None
+    obsolete: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -120,6 +123,7 @@ class DotnetSpec:
     project: Path
     exe: str
     publish_profile: str | None = None
+    obsolete: list[str] = field(default_factory=list)
 
 
 def read_descriptor(repo_dir: Path) -> dict:
@@ -128,6 +132,14 @@ def read_descriptor(repo_dir: Path) -> dict:
     if not path.exists():
         raise FileNotFoundError(f"{path} not found; add the descriptor to the repository.")
     return tomllib.loads(path.read_text(encoding="utf-8"))
+
+
+def read_obsolete(data: dict) -> list[str]:
+    """Returns the 'obsolete' list of sct_app.toml: file names in the Updater root that an install deletes (renamed exes)."""
+    names = data.get("obsolete", [])
+    if not isinstance(names, list) or not all(isinstance(n, str) and re.fullmatch(r"[^\/:*?\"<>|]+", n) and n not in (".", "..") for n in names):
+        raise ValueError("sct_app.toml: obsolete must be a list of plain file names")
+    return names
 
 
 def load_dotnet_spec(repo_dir: Path) -> DotnetSpec:
@@ -139,7 +151,7 @@ def load_dotnet_spec(repo_dir: Path) -> DotnetSpec:
     project = repo_dir / data["project"]
     if not project.is_file():
         raise FileNotFoundError(f"sct_app.toml: project not found: {project}")
-    return DotnetSpec(repo_dir, data["id"], project, data["exe"], data.get("publish_profile"))
+    return DotnetSpec(repo_dir, data["id"], project, data["exe"], data.get("publish_profile"), read_obsolete(data))
 
 
 def sha256_of(path: Path) -> str:
@@ -168,7 +180,7 @@ def load_spec(module_dir: Path) -> AppSpec:
             raise FileNotFoundError(f"{path.name}: icon must be an existing .ico file, got {icon}")
     return AppSpec(module_dir, data["id"], read_python_minor(module_dir),
                    module_dir / "requirements.in", module_dir / "requirements.lock", data["files"],
-                   launcher, data.get("title"), icon)
+                   launcher, data.get("title"), icon, read_obsolete(data))
 
 
 def read_python_minor(module_dir: Path) -> str:
@@ -296,7 +308,7 @@ def fill_wheelhouse(pins: list[Pin], wheelhouse: Path, python: str) -> list[Path
 
 def build_manifest(spec: AppSpec, version: str, files: list[tuple[Path, str]], wheels: list[Path]) -> dict:
     """Builds the file manifest of a module version in the 'app' package mode."""
-    return {
+    manifest = {
         "product_id": spec.id,
         "version": version,
         "base_url": f"versions/{spec.id}/{version}",
@@ -306,6 +318,12 @@ def build_manifest(spec: AppSpec, version: str, files: list[tuple[Path, str]], w
         "files": [{"path": rel, "hash": sha256_of(path)} for path, rel in files],
         "wheels": [{"file": w.name, "sha256": sha256_of(w), "size": w.stat().st_size} for w in wheels],
     }
+    own = {rel.lower() for _, rel in files}
+    if clash := [n for n in spec.obsolete if n.lower() in own]:
+        raise ValueError(f"sct_app.toml: obsolete lists files of the package: {', '.join(clash)}")
+    if spec.obsolete:
+        manifest["obsolete"] = spec.obsolete
+    return manifest
 
 
 def wheelhouse_dir() -> Path:
@@ -636,10 +654,11 @@ def read_exe_version(exe: Path) -> str:
     return ".".join(map(str, parts[:3] if parts[3] == 0 else parts))
 
 
-def build_zip_package(folder: Path, product_id: str, version: str, out_dir: Path) -> tuple[Path, Path]:
+def build_zip_package(folder: Path, product_id: str, version: str, out_dir: Path,
+                      obsolete: list[str] | None = None) -> tuple[Path, Path]:
     """Zips the content of a folder and writes the zip-mode manifest of the product.
 
-    Returns (manifest path, zip path); the manifest lists the zip with its SHA256.
+    Returns (manifest path, zip path); the manifest lists the zip with its SHA256 and the obsolete file names.
     """
     zip_name = f"{product_id}_{version}.zip"
     zip_path = out_dir / zip_name
@@ -650,16 +669,20 @@ def build_zip_package(folder: Path, product_id: str, version: str, out_dir: Path
                 logger.info(f"  + {item.relative_to(folder).as_posix()}")
     manifest = {"product_id": product_id, "version": version, "base_url": f"versions/{product_id}/{version}",
                 "package_mode": "zip", "files": [{"path": zip_name, "hash": sha256_of(zip_path)}]}
+    if obsolete:
+        if clash := [n for n in obsolete if (folder / n).exists()]:
+            raise ValueError(f"sct_app.toml: obsolete lists files of the package: {', '.join(clash)}")
+        manifest["obsolete"] = obsolete
     manifest_path = out_dir / f"{product_id}_{version}.json"
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return manifest_path, zip_path
 
 
-def release_folder(folder: Path, product_id: str, version: str, upload: bool) -> None:
+def release_folder(folder: Path, product_id: str, version: str, upload: bool, obsolete: list[str] | None = None) -> None:
     """Releases a folder as a zip package; uploads only with upload=True (otherwise a dry run)."""
     out_dir = REPO_ROOT / "release_artifacts"
     out_dir.mkdir(exist_ok=True)
-    manifest_path, zip_path = build_zip_package(folder, product_id, version, out_dir)
+    manifest_path, zip_path = build_zip_package(folder, product_id, version, out_dir, obsolete)
     logger.info(f"{product_id} {version}: {zip_path.name} {zip_path.stat().st_size / 1048576:.1f} MB")
 
     if not upload:
@@ -693,7 +716,7 @@ def cmd_dotnet(args: argparse.Namespace) -> None:
     version = read_exe_version(folder / spec.exe)
     if args.version and args.version != version:
         sys.exit(f"The built {spec.exe} has version {version}, not {args.version}: change the version in the project.")
-    release_folder(folder, spec.id, version, args.upload)
+    release_folder(folder, spec.id, version, args.upload, spec.obsolete)
 
 
 def main() -> None:

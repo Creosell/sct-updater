@@ -183,6 +183,46 @@ def test_manifest_describes_code_and_wheels(tmp_path):
     assert manifest["wheels"] == [{"file": wheel.name, "sha256": ar.sha256_of(wheel), "size": wheel.stat().st_size}]
 
 
+def with_obsolete(value: str) -> str:
+    return f"""obsolete = {value}
+""" + DESCRIPTOR
+
+
+def test_obsolete_files_are_written_to_the_manifest(tmp_path):
+    spec = ar.load_spec(write_module(tmp_path, with_obsolete('["Demo_old.exe"]')))
+
+    manifest = ar.build_manifest(spec, "2.0.0", ar.collect_files(spec), [])
+
+    assert manifest["obsolete"] == ["Demo_old.exe"]
+    plain = ar.load_spec(write_module(tmp_path / "b", DESCRIPTOR))
+    assert "obsolete" not in ar.build_manifest(plain, "2.0.0", ar.collect_files(plain), [])
+
+
+@pytest.mark.parametrize("value", ['"a.exe"', '["sub/a.exe"]', '[".."]', '[1]'])
+def test_obsolete_must_be_a_list_of_plain_file_names(tmp_path, value):
+    with pytest.raises(ValueError, match="obsolete"):
+        ar.load_spec(write_module(tmp_path, with_obsolete(value)))
+
+
+def test_obsolete_cannot_name_a_file_of_the_package(tmp_path):
+    spec = ar.load_spec(write_module(tmp_path, with_obsolete('["__main__.py"]')))
+
+    with pytest.raises(ValueError, match="obsolete"):
+        ar.build_manifest(spec, "1.0.0", [(tmp_path / "main.py", "__main__.py")], [])
+
+
+def test_zip_package_carries_the_obsolete_files(tmp_path):
+    folder = tmp_path / "build"
+    folder.mkdir()
+    (folder / "New.exe").write_bytes(b"x")
+
+    manifest_path, _ = ar.build_zip_package(folder, "demo", "1.0.0", tmp_path, ["Old.exe"])
+
+    assert json.loads(manifest_path.read_text(encoding="utf-8"))["obsolete"] == ["Old.exe"]
+    with pytest.raises(ValueError, match="obsolete"):
+        ar.build_zip_package(folder, "demo", "1.0.1", tmp_path, ["New.exe"])
+
+
 # --- upload ---
 
 class FakeFiles:

@@ -65,6 +65,8 @@ Any other build folder (for example Screen Checker) is released with `uv run too
 
 The Updater, the other .NET projects and the Python modules are released with `tools/release/app_release.py` (`app`, `zip`, `upgrade`, `gc`); `app` looks at `sct_app.toml` of the repository: `kind = "dotnet"` builds a .NET project, otherwise it is a Python module. Each module repository holds `sct_app.toml`, `requirements.in` and `requirements.lock`; the tool uploads the code and only the wheels missing on the server (`runtime/wheels`). The Updater unpacks wheels into `apps/<module>` with `WheelInstaller`; the Python interpreter is the only shared piece.
 
+Renamed exes: list the old file names in `obsolete = [...]` of `sct_app.toml`; the Updater deletes them from its root on install (see the guide).
+
 The full process, file layout, rules (one Python minor version, `SCT_ROOT`, no `import site`, `AsyncNextcloud`) and implementation status are in [docs/module-release.md](docs/module-release.md). **Keep that file and the instructions of every module repository in sync when the release process changes.**
 
 Tests: `dotnet test SCT_Updater.Tests/SCT_Updater.Tests.csproj` (Updater), `python -m pytest tools/release/tests` (release tool).
