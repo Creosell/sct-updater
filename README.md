@@ -1,4 +1,4 @@
-﻿# SCT Updater
+# SCT Updater
 
 Windows application for managing updates of Screen Check Tool (SCT) suite components. Downloads and installs module updates from Nextcloud.
 
@@ -17,7 +17,7 @@ Windows application for managing updates of Screen Check Tool (SCT) suite compon
 ## Requirements
 
 - Windows 10/11
-- .NET Framework 4.8
+- .NET 8 Desktop Runtime (the same as Screen Checker needs)
 
 ## Configuration
 
@@ -31,13 +31,11 @@ NC_PASSWORD_QA=your_app_password
 
 ## Releasing
 
-The release script is at `tools/release/release_manager.py`. Requires [uv](https://docs.astral.sh/uv/) with an active virtual environment that has the dependencies installed.
+The Updater and all Python modules are released with one tool, `tools/release/app_release.py`. Requires [uv](https://docs.astral.sh/uv/) with an active virtual environment that has the dependencies installed.
 
 ### Build specifics
 
-The project targets **.NET Framework 4.8** and uses **Costura.Fody** to embed all dependencies into a single `Updater.exe`. Standard `dotnet publish` does not work for this — build must be done via Visual Studio.
-
-In Visual Studio: set configuration to **Release** → **Build → Build Solution**. The output is in `SCT_Updater\bin\Release\app.publish\`.
+The project is SDK-style and targets **.NET 8** (`net8.0-windows`, framework-dependent). Only the .NET 8 SDK is needed: `dotnet build SCT_Updater/SCT_Updater.csproj -c Release`. The release package is a single-file `Updater.exe` made by `dotnet publish` (`PublishSingleFile`), so there is no separate dll and no Costura.Fody.
 
 ### Release steps
 
@@ -45,33 +43,25 @@ In Visual Studio: set configuration to **Release** → **Build → Build Solutio
 
 Create `tools/release/.env` based on `tools/release/.env.example` and fill in your Nextcloud credentials.
 
-**2. Build in Visual Studio**
+**2. Release**
 
-Set configuration to **Release** and build the solution. Verify `SCT_Updater\bin\Release\app.publish\Updater.exe` exists.
-
-**3. Run the release manager**
-
-From the repo root:
+From the repo root (without `--upload` it is a dry run: the Updater is built and packaged, nothing is sent):
 
 ```bash
-uv run --active .\tools\release\release_manager.py zip .\SCT_Updater\bin\Release\app.publish\ suite_updater 1.0.1 --upload
+uv run tools/release/app_release.py updater --upload
 ```
 
-Replace `1.0.1` with the actual version from `AssemblyInfo.cs`.
+The tool publishes the Updater (`dotnet publish`, Release) into the clean folder `release_artifacts/build/suite_updater`, so the package is never stale and holds nothing but the fresh build. The Updater must stay a single exe; the tool refuses to package a build with loose dlls. The version is read from the built `Updater.exe` (`AssemblyVersion` / `FileVersion` in `SCT_Updater.csproj`), so it cannot differ from the build. The tool zips the folder, uploads the zip to `SCT/Updater/versions/suite_updater/<version>/` and publishes the manifest last. The files are also written to `release_artifacts/` (gitignored).
 
-| Argument | Description |
-|----------|-------------|
-| `zip` | Package mode — single zip archive |
-| `.\SCT_Updater\bin\Release\app.publish\` | Path to Costura build output |
-| `suite_updater` | Product identifier on Nextcloud |
-| `1.0.1` | Version (must match `AssemblyVersion` in `AssemblyInfo.cs`) |
-| `--upload` | Skip confirmation and upload immediately |
+Any other build folder is released with the same tool: `uv run tools/release/app_release.py zip <folder> <product_id> <version> --upload` (a dry run without `--upload`).
 
-The script creates `release_artifacts/` locally (gitignored) with the zip and manifest, then uploads to `SCT/Updater/versions/updater/1.0.1/`.
+**3. Roll it out**
+
+Edit `suite_manifest.json` by hand: put the version into `dev` first, into `products` when it is verified. Self-update compares only the version number, so a changed build needs a new version.
 
 ### Python modules (Nextcloud CLI, Report Generator, ...)
 
-Python modules are released with a separate tool, `tools/release/app_release.py` (commands `lock`, `app`, `python-core`). Each module repository contains only `sct_app.toml`, `requirements.in` and `requirements.lock`; the tool uploads the code and the missing wheels. See [docs/module-release.md](docs/module-release.md) for the full process, layout, rules and status.
+Python modules are released with a separate tool, `tools/release/app_release.py` (commands `app` and `upgrade`). Each module repository contains only `sct_app.toml`, `requirements.in` and `requirements.lock`; the tool uploads the code and the missing wheels. See [docs/module-release.md](docs/module-release.md) for the full process, layout, rules and status.
 
 ## Changelog
 

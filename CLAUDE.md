@@ -4,15 +4,14 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 ## Project Overview
 
-WinForms desktop application (.NET Framework 4.8) for managing updates of Screen Check Tool (SCT) suite components. Downloads and installs module updates from a Nextcloud server.
+WinForms desktop application (.NET 8, `net8.0-windows`) for managing updates of Screen Check Tool (SCT) suite components. Downloads and installs module updates from a Nextcloud server.
 
 ## Build & Run
 
-**Build (Visual Studio required):**
-Visual Studio → set configuration to **Release** → Build Solution.
-Output: `SCT_Updater\bin\Release\app.publish\Updater.exe`
+**Build:** only the .NET 8 SDK is needed (no Visual Studio, MSBuild or NuGet CLI): `dotnet build SCT_Updater/SCT_Updater.csproj -c Release`.
+Release package: `dotnet publish SCT_Updater/SCT_Updater.csproj -c Release -o <folder>` (done by `app_release.py updater`) gives one framework-dependent single-file `Updater.exe` (about 2 MB; the .NET 8 Desktop Runtime must be installed, as for Screen Checker).
 
-> `dotnet build` / `dotnet publish` do not work — the project uses **Costura.Fody** to embed all dependencies into a single exe, which requires MSBuild with .NET Framework toolchain.
+> **Requirement: the Updater is a single `Updater.exe`.** It is produced by `PublishSingleFile` (the project is SDK-style, so Costura.Fody is no longer used), and `app_release.py updater` refuses to package a build with loose dlls. Any change of the build must keep this.
 
 ## Architecture
 
@@ -49,22 +48,22 @@ NC_PASSWORD_QA=your_app_password
 
 ## Version
 
-Current version: **1.1.1** (set in `SCT_Updater\Properties\AssemblyInfo.cs` — `AssemblyVersion` / `AssemblyFileVersion`). See [CHANGELOG.md](CHANGELOG.md) for history.
+Current version: **1.2.0** (set in `SCT_Updater\SCT_Updater.csproj` — `AssemblyVersion` / `FileVersion`). See [CHANGELOG.md](CHANGELOG.md) for history.
 
 ## Releasing
 
 See [README.md](README.md#releasing) for full release instructions.
 
-Release command (from repo root):
+Release command (from repo root; the tool publishes the Updater with `dotnet publish` into a clean folder, reads the version from Updater.exe, and without `--upload` it is a dry run):
 ```bash
-uv run --active .\tools\release\release_manager.py zip .\SCT_Updater\bin\Release\app.publish\ suite_updater 1.1.1 --upload
+uv run tools/release/app_release.py updater --upload
 ```
 
-Do not run `Rebuild` on the Release configuration (MSBuild `-t:Rebuild`): it cleans `SCT_Updater\bin\Release\app.publish`, including files installed there for manual testing. Use a normal build.
+Any other build folder (for example Screen Checker) is released with `uv run tools/release/app_release.py zip <folder> <product_id> <version> --upload`.
 
 ## Python modules (Nextcloud CLI, Report Generator, ...)
 
-Python modules are released with `tools/release/app_release.py` (`lock`, `app`, `python-core`). Each module repository holds `sct_app.toml`, `requirements.in` and `requirements.lock`; the tool uploads the code and only the wheels missing on the server (`runtime/wheels`). The Updater unpacks wheels into `apps/<module>` with `WheelInstaller`; the Python interpreter is the only shared piece.
+The Updater and the Python modules are released with `tools/release/app_release.py` (`updater`, `zip`, `app`, `upgrade`). Each module repository holds `sct_app.toml`, `requirements.in` and `requirements.lock`; the tool uploads the code and only the wheels missing on the server (`runtime/wheels`). The Updater unpacks wheels into `apps/<module>` with `WheelInstaller`; the Python interpreter is the only shared piece.
 
 The full process, file layout, rules (one Python minor version, `SCT_ROOT`, no `import site`, `AsyncNextcloud`) and implementation status are in [docs/module-release.md](docs/module-release.md). **Keep that file and the instructions of every module repository in sync when the release process changes.**
 

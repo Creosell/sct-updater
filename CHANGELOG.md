@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [1.1.1] - 2026-11-23
+## [1.2.0] - 2026-11-24
 
 ### Added
 - `runtime-share` package mode: files are downloaded from the shared blob store `versions/python_runtime/<hash[:2]>/<hash>` (manifest `store_url`) and verified by SHA256 before being written; `release_manager.py runtime-share ...` uploads only the blobs missing from the store and publishes the product manifest last
@@ -15,11 +15,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Update channels: `dev` list in `suite_manifest.json`, selected with `NC_CHANNEL=dev` in `.env` (title shows `[DEV]`); falls back to `products` when `dev` is missing or empty
 - Rebuild detection: SHA256 of the installed file manifest is stored in `local_versions.json` (`manifest_hash`); if the server manifest of the same version differs, the product is flagged "Rebuilt" and a reinstall is offered
 - `SCT_Updater.Tests` project (xUnit) covering channel resolution, rebuild detection, local state, runtime-share, wheel installation and app packages
-- Rust launcher (`launcher/`) that starts a Python module from `apps/python_runtime` with `SCT_ROOT` set, built by `app_release.py`
-- `app` package mode for Python modules: shared embeddable Python in `apps/python_runtime`, module code and wheels in `apps/<module>` (wheels verified by SHA256, cached in `tools/wheelhouse`), clean migration from `zip`; see `docs/module-release.md`
+- Rust launcher (`launcher/`) that starts a Python module from `apps/python_runtime` with `SCT_ROOT` set, built by `app_release.py` with the module icon and file properties (file version = module release version)
+- `app_release.py updater`: the Updater is released with the same tool as the modules (single-exe check, version read from `Updater.exe`, manifest published last)
+- `app` package mode for Python modules: shared embeddable Python in `apps/python_runtime`, module code and wheels in `apps/<module>` (wheels verified by SHA256, cached in `apps/wheelhouse`), clean migration from `zip`; see `docs/module-release.md`
 
 ### Changed
 - `description` removed from the suite manifest and the module grid
+- Ported to .NET 8 (`net8.0-windows`, SDK-style project, framework-dependent single-file `Updater.exe`); Costura.Fody and `packages.config` removed, the version now lives in `SCT_Updater.csproj`
+- `app_release.py updater` publishes the Updater with `dotnet publish` into a clean folder; new `app_release.py zip <folder> <product_id> <version>` releases any build folder
+
+### Fixed
+- The `logs` folder is created when missing, so a log is written in a clean installation folder
 
 ---
 
