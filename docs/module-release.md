@@ -66,7 +66,8 @@ Nextcloud credentials, and [uv](https://docs.astral.sh/uv/).
 # Release a module version: code, missing wheels, Python (if the server lacks it), manifest last.
 # The lock file is updated automatically when requirements.in changed (commit it).
 # Without --upload it is a dry run: the manifest is prepared and nothing is sent.
-uv run tools/release/app_release.py app nextcloud-cli 1.3.0 --upload
+# The version is optional: by default the tool takes the one the module keeps (project.version of pyproject.toml and APP_VERSION of the .py files listed in sct_app.toml; the places must agree, a given version overrides them with a warning).
+uv run tools/release/app_release.py app nextcloud-cli --upload
 # The same with an alias (updater, nextcloud-cli, report-generator, screen-checker; see REPO_ALIASES) and, with the `app-release` function of the PowerShell profile (see README), from any folder:
 app-release app nextcloud-cli 1.3.0 --upload
 

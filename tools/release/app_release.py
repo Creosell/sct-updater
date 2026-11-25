@@ -548,13 +548,46 @@ def cmd_upgrade(args: argparse.Namespace) -> None:
     logger.success(f"Versions upgraded in {spec.lock}; commit it.")
 
 
+def read_module_versions(spec: AppSpec) -> dict[str, str]:
+    """Returns the versions a module keeps: ``pyproject.toml`` (project.version) and every ``APP_VERSION = "x"`` of its .py files listed in sct_app.toml."""
+    found: dict[str, str] = {}
+    pyproject = spec.root / "pyproject.toml"
+    if pyproject.is_file():
+        version = tomllib.loads(pyproject.read_text(encoding="utf-8")).get("project", {}).get("version")
+        if version:
+            found[pyproject.name] = str(version)
+    for entry in spec.files:
+        source = spec.root / entry["src"]
+        if source.suffix == ".py" and source.is_file():
+            match = re.search(r"^APP_VERSION\s*=\s*[\"']([^\"']+)[\"']", source.read_text(encoding="utf-8"), re.MULTILINE)
+            if match:
+                found[source.name] = match.group(1)
+    return found
+
+
+def resolve_module_version(spec: AppSpec, requested: str | None) -> str:
+    """Returns the release version: the one given, else the version the module keeps in its files (they must agree)."""
+    found = read_module_versions(spec)
+    if requested:
+        stale = {name: v for name, v in found.items() if v != requested}
+        if stale:
+            logger.warning(f"Releasing {requested}, but the module still says " + ", ".join(f"{n} {v}" for n, v in stale.items()))
+        return requested
+    if not found:
+        sys.exit("The version is required: the module has no pyproject.toml version and no APP_VERSION.")
+    if len(set(found.values())) > 1:
+        sys.exit("The version places disagree: " + ", ".join(f"{n} {v}" for n, v in found.items()) + ". Fix them or pass the version.")
+    version = next(iter(found.values()))
+    logger.info(f"Version {version} (from {', '.join(found)})")
+    return version
+
+
 def cmd_app(args: argparse.Namespace) -> None:
     """Prepares a release of the repository; uploads it only with --upload (otherwise a dry run)."""
     if read_descriptor(Path(args.module)).get("kind") == "dotnet":
         return cmd_dotnet(args)
-    if not args.version:
-        sys.exit("The version is required for a Python module.")
     spec = load_spec(Path(args.module))
+    args.version = resolve_module_version(spec, args.version)
     ensure_lock(spec)
 
     wheelhouse = wheelhouse_dir()
@@ -776,7 +809,7 @@ def main() -> None:
 
     app = sub.add_parser("app", help="release a repository: Python module or .NET project (dry run unless --upload)")
     app.add_argument("module", type=resolve_repo, help="repository alias (updater, nextcloud-cli, report-generator, screen-checker) or path of the repository")
-    app.add_argument("version", nargs="?", help="release version (optional for a .NET project: read from the built exe)")
+    app.add_argument("version", nargs="?", help="release version (optional: a .NET project reads it from the built exe, a Python module from pyproject.toml and APP_VERSION)")
     app.add_argument("--upload", action="store_true", help="publish to the server")
     app.set_defaults(func=cmd_app)
 

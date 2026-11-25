@@ -61,6 +61,40 @@ target = "root"
 '''
 
 
+# --- version ---
+
+def versioned_module(root: Path, pyproject: str | None, app_version: str | None) -> ar.AppSpec:
+    """Creates a demo module whose version lives in pyproject.toml and/or APP_VERSION of main.py."""
+    write_module(root, DESCRIPTOR)
+    if pyproject:
+        (root / "pyproject.toml").write_text(f'[project]\nname = "demo"\nversion = "{pyproject}"\n', encoding="utf-8")
+    if app_version:
+        (root / "main.py").write_text(f'APP_VERSION = "{app_version}"\n', encoding="utf-8")
+    return ar.load_spec(root)
+
+
+def test_version_defaults_to_the_one_the_module_keeps(tmp_path):
+    assert ar.resolve_module_version(versioned_module(tmp_path, "1.5.3", "1.5.3"), None) == "1.5.3"
+
+
+def test_version_can_come_from_a_single_place(tmp_path):
+    assert ar.resolve_module_version(versioned_module(tmp_path, None, "2.0.1"), None) == "2.0.1"
+
+
+def test_disagreeing_version_places_stop_the_release(tmp_path):
+    with pytest.raises(SystemExit, match="disagree"):
+        ar.resolve_module_version(versioned_module(tmp_path, "1.5.3", "1.5.2"), None)
+
+
+def test_no_version_anywhere_requires_it_on_the_command_line(tmp_path):
+    with pytest.raises(SystemExit, match="version is required"):
+        ar.resolve_module_version(versioned_module(tmp_path, None, None), None)
+
+
+def test_a_given_version_wins_over_the_files(tmp_path):
+    assert ar.resolve_module_version(versioned_module(tmp_path, "1.5.3", "1.5.3"), "1.6.0") == "1.6.0"
+
+
 # --- descriptor ---
 
 def test_load_spec_reads_the_descriptor(tmp_path):

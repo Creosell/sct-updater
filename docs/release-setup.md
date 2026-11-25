@@ -65,8 +65,10 @@ A .NET-only release (the Updater, Screen Checker) does not need Rust; a Python m
 
    ```powershell
    app-release app updater
-   app-release app nextcloud-cli 1.1.0
+   app-release app nextcloud-cli
    ```
+
+   The version of a Python module is optional: without it the tool takes the one the module keeps (`version` in `pyproject.toml` and `APP_VERSION` in the listed `.py` file; they must agree).
 
    The packages and manifests appear in `release_artifacts/` of the Updater repository. A failure here is a missing tool
    from the table above (see Troubleshooting).
@@ -129,7 +131,8 @@ release (see [module-release.md](module-release.md)).
 | `MSBuild not found: put it on PATH, set MSBUILD, ...` | install Build Tools with the .NET desktop build tools workload or set `MSBUILD` |
 | linker or `rc.exe` error while building the launcher | install the **Desktop development with C++** workload (it brings the linker and the Windows SDK) |
 | `repository folder not found: ... (aliases: ...)` | the alias is wrong or the repository is not at the path of `REPO_ALIASES` |
-| `The version is required for a Python module.` | give the version: `app-release app report-generator 1.5.2` |
+| `The version places disagree: ...` | `pyproject.toml` and `APP_VERSION` of the module say different versions: fix them, or pass the version |
+| `The version is required: ...` | the module keeps no version in `pyproject.toml` or `APP_VERSION`: pass it, `app-release app report-generator 1.5.3` |
 | `The built Updater.exe has version X, not Y` | change the version in the project, or drop the version argument |
 | `The build must be a single exe, found: ...` | the project build produced loose dlls; keep `PublishSingleFile` |
 | `KeyError: 'NC_URL'` or an authentication failure | fill `tools/release/.env` (see step 2) |
