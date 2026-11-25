@@ -32,6 +32,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Removed
 - The Help menu with "Install drivers for CA-310" (the driver package is handed out manually; the Updater installs nothing from it)
 - `tools/release/release_manager.py` (replaced by `app_release.py app` and `app_release.py zip`)
+- `Updater/manifests/` and `Updater/release_artifacts/` (leftovers of the old release scripts, 1.0.0 packages)
 
 ### Fixed
 - Self-update copied nothing: `Application.StartupPath` ends with a backslash on .NET 8, which escaped the closing quote of the robocopy command, so the Updater restarted in an endless loop with the old files
