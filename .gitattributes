@@ -61,4 +61,4 @@
 #*.PDF   diff=astextplain
 #*.rtf   diff=astextplain
 #*.RTF   diff=astextplain
-graphify-out/graph.json merge=graphify
+graphify-out/graph.json merge=graphify linguist-generated=true -diff
