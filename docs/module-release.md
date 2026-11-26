@@ -88,7 +88,7 @@ uv run tools/release/app_release.py gc
 
 ## Typical tasks
 
-**Release new module code (no dependency change):** `app <module> <version> --upload`. Only the changed code files are
+**Release new module code (no dependency change):** `app <module> <version> --upload` (add `--promote prod` or `--promote dev` to also make it the current version of that channel in `suite_manifest.json`). Only the changed code files are
 uploaded; clients download only the changed files.
 
 **Add a dependency:** edit `requirements.in` and run `app <module> <version>`: the lock is updated automatically (commit it); with `--upload` only the new wheels are uploaded and downloaded. Nothing in the Updater repository has to change.

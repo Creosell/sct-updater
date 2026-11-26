@@ -23,7 +23,10 @@ A PowerShell profile function runs the tool from any folder:
     app-release app report-generator 1.5.2 --upload
 
 Commands (the wheel cache is the folder in the SCT_WHEELHOUSE environment variable, default ~/.sct_wheelhouse):
-    app [--upload]     Release the project in a repository (dry run without --upload). The kind in sct_app.toml
+    app [--upload] [--promote prod|dev]
+                       Release the project in a repository (dry run without --upload); --promote then sets the
+                       released version as the current one of the channel (products or dev) in suite_manifest.json,
+                       the product must already be listed there. The kind in sct_app.toml
                        decides: a Python module (default) uploads code, wheels and Python; kind = "dotnet" builds
                        the project with MSBuild (publish, Release) and releases it as a zip package, the version is
                        read from the built exe.
@@ -93,6 +96,10 @@ PYTHON_REMOTE = f"{REMOTE_ROOT}/runtime/python"
 PYTHON_DESCRIPTOR_REMOTE = f"{REMOTE_ROOT}/runtime"
 MAX_WORKERS = 8
 UPLOAD_RETRIES = 3
+SUITE_MANIFEST_REMOTE = f"{REMOTE_ROOT}/suite_manifest.json"
+# --promote channel -> list of suite_manifest.json that holds the current versions of the channel
+CHANNEL_KEYS = {"prod": "products", "dev": "dev"}
+PROMOTE_HELP = "after --upload, set the released version as the current one of the channel in suite_manifest.json"
 
 UPDATER_REPO = REPO_ROOT
 NEXTCLOUD_CLI_REPO = Path(r"D:\Python_scripts\sct-nextcloud-cli")
@@ -451,9 +458,40 @@ def python_descriptor(info: dict, archive: Path, folder: Path) -> Path:
     return descriptor
 
 
+async def read_remote_json(nc, remote: str) -> dict:
+    """Downloads a JSON file from the server."""
+    return json.loads((await nc.files.download(remote)).decode("utf-8"))
+
+
+async def read_promoted_suite(nc, product_id: str, version: str, channel: str) -> dict:
+    """Downloads suite_manifest.json and returns it with the version of the product set for the channel.
+
+    Exits when the product is not listed in the channel, so a bad promotion is found before anything is uploaded.
+    """
+    suite = await read_remote_json(nc, SUITE_MANIFEST_REMOTE)
+    key = CHANNEL_KEYS[channel]
+    entry = next((p for p in suite.get(key, []) if p["id"] == product_id), None)
+    if entry is None:
+        sys.exit(f"{product_id} is not listed in '{key}' of suite_manifest.json; add the product there first.")
+    entry["latest_version"] = version
+    return suite
+
+
+async def publish_suite(nc, suite: dict, out_dir: Path) -> None:
+    """Uploads suite_manifest.json, the file the clients read to learn the current versions."""
+    local = out_dir / "suite_manifest.json"
+    local.write_text(json.dumps(suite, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    if not await upload_all(nc, [(local, SUITE_MANIFEST_REMOTE)]):
+        sys.exit("suite_manifest.json upload failed")
+
+
 async def upload_app(nc, manifest: dict, files: list[tuple[Path, str]], wheels: list[Path], manifest_path: Path,
-                     python_zip: Path, python_json: Path) -> None:
-    """Uploads the missing wheels and Python archive and the code files, then publishes the manifest last."""
+                     python_zip: Path, python_json: Path, promote: str | None = None) -> None:
+    """Uploads the missing wheels and Python archive and the code files, then publishes the manifest last.
+
+    With ``promote`` ("prod" or "dev") the version is then set as the current one of that channel in suite_manifest.json.
+    """
+    suite = await read_promoted_suite(nc, manifest["product_id"], manifest["version"], promote) if promote else None
     remote_wheels = await list_remote(nc, WHEELS_REMOTE)
     remote_python = await list_remote(nc, PYTHON_REMOTE)
     missing = [w for w in wheels if remote_wheels.get(w.name) != w.stat().st_size]
@@ -475,6 +513,9 @@ async def upload_app(nc, manifest: dict, files: list[tuple[Path, str]], wheels: 
     target = f"{REMOTE_ROOT}/versions/{manifest['product_id']}/{manifest_path.name}"
     if not await upload_all(nc, [(manifest_path, target)]):
         sys.exit("Manifest upload failed")
+    if suite:
+        await publish_suite(nc, suite, manifest_path.parent)
+        logger.info(f"suite_manifest.json: {manifest['product_id']} {manifest['version']} is now current in {promote}")
     logger.success("Done!")
 
 
@@ -608,7 +649,8 @@ def cmd_app(args: argparse.Namespace) -> None:
         return
 
     async def run() -> None:
-        await upload_app(await get_nc_client(), manifest, files, wheels, manifest_path, python_zip, python_json)
+        await upload_app(await get_nc_client(), manifest, files, wheels, manifest_path, python_zip, python_json,
+                         args.promote)
 
     asyncio.run(run())
 
@@ -649,11 +691,6 @@ def publish_dotnet(spec: DotnetSpec, run=subprocess.run) -> Path:
     return out
 
 
-async def read_remote_json(nc, remote: str) -> dict:
-    """Downloads a JSON file from the server."""
-    return json.loads((await nc.files.download(remote)).decode("utf-8"))
-
-
 async def referenced_runtime_files(nc) -> tuple[set[str], set[str]]:
     """Returns the wheel names and the Python archive names used by the versions the clients can install.
 
@@ -661,7 +698,7 @@ async def referenced_runtime_files(nc) -> tuple[set[str], set[str]]:
     by the runtime/python_<minor>.json descriptors. Exits when a listed manifest cannot be read, so nothing is
     judged unused on incomplete information.
     """
-    suite = await read_remote_json(nc, f"{REMOTE_ROOT}/suite_manifest.json")
+    suite = await read_remote_json(nc, SUITE_MANIFEST_REMOTE)
     listed = sorted({(p["id"], p["latest_version"]) for key in ("products", "dev") for p in suite.get(key, [])})
     wheels: set[str] = set()
     for product_id, version in listed:
@@ -747,8 +784,12 @@ def build_zip_package(folder: Path, product_id: str, version: str, out_dir: Path
     return manifest_path, zip_path
 
 
-def release_folder(folder: Path, product_id: str, version: str, upload: bool, obsolete: list[str] | None = None) -> None:
-    """Releases a folder as a zip package; uploads only with upload=True (otherwise a dry run)."""
+def release_folder(folder: Path, product_id: str, version: str, upload: bool, obsolete: list[str] | None = None,
+                   promote: str | None = None) -> None:
+    """Releases a folder as a zip package; uploads only with upload=True (otherwise a dry run).
+
+    With ``promote`` ("prod" or "dev") the version is then set as the current one of that channel in suite_manifest.json.
+    """
     out_dir = REPO_ROOT / "release_artifacts"
     out_dir.mkdir(exist_ok=True)
     manifest_path, zip_path = build_zip_package(folder, product_id, version, out_dir, obsolete)
@@ -760,11 +801,15 @@ def release_folder(folder: Path, product_id: str, version: str, upload: bool, ob
 
     async def run() -> None:
         nc = await get_nc_client()
+        suite = await read_promoted_suite(nc, product_id, version, promote) if promote else None
         base = f"{REMOTE_ROOT}/versions/{product_id}"
         if not await upload_all(nc, [(zip_path, f"{base}/{version}/{zip_path.name}")]):
             sys.exit("Upload failed. Manifest not published.")
         if not await upload_all(nc, [(manifest_path, f"{base}/{manifest_path.name}")]):
             sys.exit("Manifest upload failed")
+        if suite:
+            await publish_suite(nc, suite, out_dir)
+            logger.info(f"suite_manifest.json: {product_id} {version} is now current in {promote}")
         logger.success("Done!")
 
     asyncio.run(run())
@@ -775,7 +820,7 @@ def cmd_zip(args: argparse.Namespace) -> None:
     folder = Path(args.folder)
     if not folder.is_dir():
         sys.exit(f"Folder not found: {folder}")
-    release_folder(folder, args.product_id, args.version, args.upload)
+    release_folder(folder, args.product_id, args.version, args.upload, promote=args.promote)
 
 
 def cmd_dotnet(args: argparse.Namespace) -> None:
@@ -785,7 +830,7 @@ def cmd_dotnet(args: argparse.Namespace) -> None:
     version = read_exe_version(folder / spec.exe)
     if args.version and args.version != version:
         sys.exit(f"The built {spec.exe} has version {version}, not {args.version}: change the version in the project.")
-    release_folder(folder, spec.id, version, args.upload, spec.obsolete)
+    release_folder(folder, spec.id, version, args.upload, spec.obsolete, args.promote)
 
 
 def main() -> None:
@@ -797,6 +842,7 @@ def main() -> None:
     zipper.add_argument("product_id")
     zipper.add_argument("version")
     zipper.add_argument("--upload", action="store_true", help="publish to the server")
+    zipper.add_argument("--promote", choices=sorted(CHANNEL_KEYS), help=PROMOTE_HELP)
     zipper.set_defaults(func=cmd_zip)
 
     gc = sub.add_parser("gc", help="list (or delete with --delete) wheels and Python archives no listed version uses")
@@ -811,6 +857,7 @@ def main() -> None:
     app.add_argument("module", type=resolve_repo, help="repository alias (updater, nextcloud-cli, report-generator, screen-checker) or path of the repository")
     app.add_argument("version", nargs="?", help="release version (optional: a .NET project reads it from the built exe, a Python module from pyproject.toml and APP_VERSION)")
     app.add_argument("--upload", action="store_true", help="publish to the server")
+    app.add_argument("--promote", choices=sorted(CHANNEL_KEYS), help=PROMOTE_HELP)
     app.set_defaults(func=cmd_app)
 
     args = parser.parse_args()

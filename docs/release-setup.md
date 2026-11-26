@@ -117,9 +117,9 @@ release (see [module-release.md](module-release.md)).
 
 | Command | What it does |
 |---------|--------------|
-| `app <repo> [version] [--upload]` | releases a repository; dry run without `--upload` |
+| `app <repo> [version] [--upload] [--promote prod\|dev]` | releases a repository; dry run without `--upload`; `--promote` then sets the version as current in `products` (prod) or `dev` of `suite_manifest.json` |
 | `upgrade <repo>` | moves the pinned dependencies of a Python module to the newest versions `requirements.in` allows (commit the lock) |
-| `zip <folder> <product_id> <version> [--upload]` | releases any ready build folder as a zip package |
+| `zip <folder> <product_id> <version> [--upload] [--promote prod\|dev]` | releases any ready build folder as a zip package |
 | `gc [--delete]` | lists (and removes) unused wheels and Python archives on the server |
 
 ## Troubleshooting

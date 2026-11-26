@@ -738,7 +738,7 @@ def run_dotnet_release(tmp_path, monkeypatch, built_version, requested=None):
     monkeypatch.setattr(ar, "read_exe_version", lambda exe: built_version)
     (tmp_path / "build" / "demo_app").mkdir(parents=True)
     (tmp_path / "build" / "demo_app" / "Demo App.exe").write_bytes(b"MZ")
-    ar.cmd_app(SimpleNamespace(module=str(repo), version=requested, upload=False))
+    ar.cmd_app(SimpleNamespace(module=str(repo), version=requested, upload=False, promote=None))
     return tmp_path / "release_artifacts"
 
 
@@ -759,7 +759,7 @@ def test_app_command_needs_a_version_for_a_python_module(tmp_path):
     module = write_module(tmp_path, DESCRIPTOR)
 
     with pytest.raises(SystemExit, match="version"):
-        ar.cmd_app(SimpleNamespace(module=str(module), version=None, upload=False))
+        ar.cmd_app(SimpleNamespace(module=str(module), version=None, upload=False, promote=None))
 
 
 # --- gc of the server runtime files ---
@@ -846,3 +846,53 @@ def test_gc_refuses_when_no_app_version_is_listed():
 
     with pytest.raises(SystemExit, match="No app version"):
         run_gc(tree, delete=True)
+
+
+# --- promotion in suite_manifest.json ---
+
+def promote_release(tmp_path, tree, channel):
+    nc = RemoteTree(tree)
+
+    async def upload_stream(remote, local):
+        nc.tree[remote] = Path(local).read_bytes()
+
+    async def mkdir(path):
+        return None
+
+    nc.upload_stream, nc.mkdir = upload_stream, mkdir
+    folder = tmp_path / "build"
+    folder.mkdir()
+    (folder / "demo.exe").write_bytes(b"exe")
+    ar.REPO_ROOT, original = tmp_path, ar.REPO_ROOT
+    original_get = ar.get_nc_client
+
+    async def connect():
+        return nc
+
+    ar.get_nc_client = connect
+    try:
+        ar.release_folder(folder, "demo", "3.0.0", True, promote=channel)
+    finally:
+        ar.REPO_ROOT, ar.get_nc_client = original, original_get
+    return nc
+
+
+@pytest.mark.parametrize("channel, key, other", [("prod", "products", "dev"), ("dev", "dev", "products")])
+def test_promote_sets_the_version_in_the_chosen_channel_only(tmp_path, channel, key, other):
+    tree = gc_tree()
+
+    nc = promote_release(tmp_path, tree, channel)
+
+    suite = json.loads(nc.tree[ar.SUITE_MANIFEST_REMOTE])
+    assert suite[key][0]["latest_version"] == "3.0.0"
+    assert suite[other][0]["latest_version"] != "3.0.0"
+
+
+def test_promote_of_an_unlisted_product_stops_before_any_upload(tmp_path):
+    tree = gc_tree(suite={"products": [], "dev": []})
+    before = dict(tree)
+
+    with pytest.raises(SystemExit, match="not listed"):
+        promote_release(tmp_path, tree, "prod")
+
+    assert tree == before
